@@ -105,6 +105,15 @@ function mergeAppointmentRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('priority', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('note', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('createdBy', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('statusChangedAt');
+  restoreIfServerMissingOrEmpty('statusChangedBy', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('statusReason', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('followUpNeeded');
+  restoreIfServerMissingOrEmpty('followUpDueAt');
+  restoreIfServerMissingOrEmpty('followUps');
+  restoreIfServerMissingOrEmpty('contactLogs');
+  restoreIfServerMissingOrEmpty('rescheduledFromAppointmentId', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('rescheduledToAppointmentId', { treatBlankStringAsEmpty: true });
   // Reserved for future client / server extensions
   restoreIfServerMissingOrEmpty('metadata');
   restoreIfServerMissingOrEmpty('notes', { treatBlankStringAsEmpty: true });

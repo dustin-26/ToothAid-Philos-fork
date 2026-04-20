@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { formatChildDisplayName } from '../utils/displayName';
 import { PatientNameBlock } from './PatientNameBlock';
 import { buildSmsHref } from '../utils/contactActions';
@@ -19,12 +20,27 @@ export default function PatientContactModal({ child, onClose, getSmsBody }) {
       : child
         ? `Regarding ${formatChildDisplayName(child)}.`
         : '';
+  const [smsDraft, setSmsDraft] = useState(smsBody);
+
+  useEffect(() => {
+    setSmsDraft(smsBody);
+  }, [smsBody]);
 
   const copyMessengerToClipboard = async () => {
     if (!messengerRaw) return;
     try {
       await navigator.clipboard.writeText(messengerRaw);
       notifySuccess('Copied');
+    } catch {
+      notifyError('Copy failed');
+    }
+  };
+
+  const copySmsToClipboard = async () => {
+    if (!smsDraft || !smsDraft.trim()) return;
+    try {
+      await navigator.clipboard.writeText(smsDraft.trim());
+      notifySuccess('Message copied');
     } catch {
       notifyError('Copy failed');
     }
@@ -70,13 +86,27 @@ export default function PatientContactModal({ child, onClose, getSmsBody }) {
                   <a href={`tel:${child.guardianPhone}`} className="btn btn-secondary btn-sm">
                     Call
                   </a>
-                  <a href={buildSmsHref(child.guardianPhone, smsBody)} className="btn btn-secondary btn-sm">
+                  <a href={buildSmsHref(child.guardianPhone, smsDraft)} className="btn btn-secondary btn-sm">
                     SMS
                   </a>
                 </div>
               ) : (
                 <span style={{ color: 'var(--color-muted)' }}>—</span>
               )}
+            </div>
+            <div className="form-group" style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600 }}>Reminder message</label>
+              <textarea
+                value={smsDraft}
+                onChange={(e) => setSmsDraft(e.target.value)}
+                rows={4}
+                placeholder="Reminder text"
+              />
+              <div style={{ marginTop: '8px' }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void copySmsToClipboard()}>
+                  Copy message
+                </button>
+              </div>
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label style={{ display: 'block', marginBottom: '4px', fontWeight: 600 }}>Messenger</label>

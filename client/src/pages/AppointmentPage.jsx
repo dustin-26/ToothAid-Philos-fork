@@ -4,6 +4,7 @@ import NavBar from '../components/NavBar';
 import PageHeader from '../components/PageHeader';
 import {
   addToOutbox,
+  getAppointment,
   getAllClinicDays,
   getAppointmentsByClinicDay,
   getChild,
@@ -13,6 +14,7 @@ import {
 } from '../db/indexedDB';
 import { PatientNameBlock } from '../components/PatientNameBlock';
 import { notifyError, notifySuccess } from '../utils/notify';
+import { isActiveBookedSlot } from '../utils/appointmentStatus';
 import { toYmd } from '../utils/dates';
 
 const ymd = (d) => {
@@ -67,6 +69,7 @@ export default function AppointmentPage({ token }) {
   const [error, setError] = useState('');
   /** In-app confirm when quota is full (some WebViews block window.confirm). */
   const [quotaFullDialog, setQuotaFullDialog] = useState(null); // null | { cd, timeWindow }
+  const rescheduleFromAppointmentId = location.state?.rescheduleFromAppointmentId || null;
 
   const [clinicDays, setClinicDays] = useState([]);
   const [dayInfo, setDayInfo] = useState(null); // { clinicDay, amRemaining, pmRemaining }
@@ -102,7 +105,7 @@ export default function AppointmentPage({ token }) {
         return;
       }
       const appts = await getAppointmentsByClinicDay(cd.clinicDayId);
-      const used = appts.filter((a) => a.status !== 'CANCELLED');
+      const used = appts.filter(isActiveBookedSlot);
       const amUsed = used.filter((a) => a.timeWindow === 'AM').length;
       const pmUsed = used.filter((a) => a.timeWindow === 'PM').length;
       const amTotal = cd.amCapacity ?? null;
@@ -137,6 +140,7 @@ export default function AppointmentPage({ token }) {
         slotNumber: null,
         reason: 'FOLLOW_UP',
         status: 'SCHEDULED',
+        rescheduledFromAppointmentId: rescheduleFromAppointmentId,
         priority,
         note: note.trim() || null,
         createdBy: username,
@@ -145,6 +149,25 @@ export default function AppointmentPage({ token }) {
 
       await upsertAppointment(appointmentData);
       await addToOutbox('UPSERT_APPOINTMENT', appointmentId, appointmentData);
+
+      if (rescheduleFromAppointmentId) {
+        const nowIso = new Date().toISOString();
+        const previous = await getAppointment(rescheduleFromAppointmentId);
+        if (previous) {
+          const previousUpdated = {
+            ...previous,
+            status: 'RESCHEDULED',
+            statusChangedAt: nowIso,
+            statusChangedBy: username,
+            statusReason: 'rescheduled-to-new-appointment',
+            rescheduledToAppointmentId: appointmentId,
+            followUpNeeded: false,
+            followUpDueAt: null
+          };
+          await upsertAppointment(previousUpdated);
+          await addToOutbox('UPSERT_APPOINTMENT', rescheduleFromAppointmentId, previousUpdated);
+        }
+      }
 
       if (navigator.onLine && token) {
         try {
@@ -204,7 +227,7 @@ export default function AppointmentPage({ token }) {
     }
 
     const appts = await getAppointmentsByClinicDay(cd.clinicDayId);
-    const used = appts.filter((a) => a.status !== 'CANCELLED');
+    const used = appts.filter(isActiveBookedSlot);
     const amUsed = used.filter((a) => a.timeWindow === 'AM').length;
     const pmUsed = used.filter((a) => a.timeWindow === 'PM').length;
     const amCap = cd.amCapacity != null ? Number(cd.amCapacity) : null;

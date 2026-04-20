@@ -15,6 +15,7 @@ import {
   upsertAppointment,
   upsertClinicDay
 } from '../db/indexedDB';
+import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
 import { formatChildDisplayName } from '../utils/displayName';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
@@ -98,6 +99,51 @@ export default function ScheduleDay({ token }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   /** Contact info popup: { child } */
   const [contactModal, setContactModal] = useState(null);
+  const [statusFilter, setStatusFilter] = useState(null);
+
+  const getStatusCategory = (status) => {
+    if (status === 'SCHEDULED') return 'ACTIVE';
+    if (status === 'CANCELLED' || status === 'RESCHEDULED') return 'FOLLOW_UP';
+    return 'DONE';
+  };
+
+  const getSimpleStatusLabel = (status) => {
+    const category = getStatusCategory(status);
+    if (category === 'ACTIVE') return 'Scheduled';
+    if (category === 'FOLLOW_UP') return 'Needs follow-up';
+    return 'Done';
+  };
+
+  const getSimpleStatusBadgeStyle = (status) => {
+    const category = getStatusCategory(status);
+    if (category === 'ACTIVE') {
+      return {
+        background: '#dbeafe',
+        color: '#1d4ed8',
+        border: '1px solid #bfdbfe'
+      };
+    }
+    if (category === 'FOLLOW_UP') {
+      return {
+        background: '#fef3c7',
+        color: '#b45309',
+        border: '1px solid #fde68a'
+      };
+    }
+    return {
+      background: '#dcfce7',
+      color: '#166534',
+      border: '1px solid #bbf7d0'
+    };
+  };
+
+  const matchesStatusFilter = (status) => {
+    if (statusFilter == null) return true;
+    if (statusFilter === 'SCHEDULED') return getStatusCategory(status) === 'ACTIVE';
+    if (statusFilter === 'FOLLOW_UP') return getStatusCategory(status) === 'FOLLOW_UP';
+    if (statusFilter === 'COMPLETED') return getStatusCategory(status) === 'DONE';
+    return false;
+  };
 
   const load = async () => {
     // Load quota record for this dateKey (prefer stable dayId)
@@ -185,7 +231,7 @@ export default function ScheduleDay({ token }) {
 
   const amTotal = Math.max(0, Number(amQuota) || 0);
   const pmTotal = Math.max(0, Number(pmQuota) || 0);
-  const used = appointments.filter((a) => a.status !== 'CANCELLED');
+  const used = appointments.filter(isActiveBookedSlot);
   const amUsed = used.filter((a) => a.timeWindow === 'AM').length;
   const pmUsed = used.filter((a) => a.timeWindow === 'PM').length;
   const amRemaining = Math.max(0, amTotal - amUsed);
@@ -231,7 +277,7 @@ export default function ScheduleDay({ token }) {
         (a) =>
           a.childId === pickedChildId &&
           a.timeWindow === pickedWindow &&
-          a.status !== 'CANCELLED'
+          isActiveBookedSlot(a)
       );
       if (dup) {
         setDuplicateApptModal(true);
@@ -303,7 +349,7 @@ export default function ScheduleDay({ token }) {
   const addAppointment = async () => {
     if (!pickedChildId) return;
     const apptsFresh = await getAppointmentsByClinicDay(dayId);
-    const used = apptsFresh.filter((a) => a.status !== 'CANCELLED');
+    const used = apptsFresh.filter(isActiveBookedSlot);
     if (used.some((a) => a.childId === pickedChildId && a.timeWindow === pickedWindow)) {
       setDuplicateApptModal(true);
       return;
@@ -375,7 +421,7 @@ export default function ScheduleDay({ token }) {
             a.appointmentId !== base.appointmentId &&
             a.childId === base.childId &&
             a.timeWindow === tw &&
-            a.status !== 'CANCELLED'
+            isActiveBookedSlot(a)
         );
         if (dup) {
           setDuplicateApptModal(true);
@@ -455,8 +501,24 @@ export default function ScheduleDay({ token }) {
     }
   };
 
-  const amList = useMemo(() => appointments.filter((a) => a.timeWindow === 'AM').slice().sort(byOrder), [appointments]);
-  const pmList = useMemo(() => appointments.filter((a) => a.timeWindow === 'PM').slice().sort(byOrder), [appointments]);
+  const supersededIds = useMemo(() => getSupersededAppointmentIds(appointments), [appointments]);
+
+  const amList = useMemo(
+    () =>
+      appointments
+        .filter((a) => a.timeWindow === 'AM' && !isAppointmentHiddenAsSuperseded(a, supersededIds))
+        .slice()
+        .sort(byOrder),
+    [appointments, supersededIds]
+  );
+  const pmList = useMemo(
+    () =>
+      appointments
+        .filter((a) => a.timeWindow === 'PM' && !isAppointmentHiddenAsSuperseded(a, supersededIds))
+        .slice()
+        .sort(byOrder),
+    [appointments, supersededIds]
+  );
 
   const moveAppointmentInWindow = async (tw, sortedScheduledIndex, delta) => {
     const sched = appointments
@@ -493,8 +555,9 @@ export default function ScheduleDay({ token }) {
   };
 
   const renderList = (label, list, remaining, tw) => {
-    const scheduled = list.filter((a) => a.status === 'SCHEDULED').slice().sort(byOrder);
-    const others = list.filter((a) => a.status !== 'SCHEDULED').slice().sort(byOrder);
+    const filtered = list.filter((a) => matchesStatusFilter(a.status));
+    const scheduled = filtered.filter((a) => a.status === 'SCHEDULED').slice().sort(byOrder);
+    const others = filtered.filter((a) => a.status !== 'SCHEDULED').slice().sort(byOrder);
 
     const rowInner = (appt, opts) => {
       const { showReorder, schedIdx } = opts || {};
@@ -591,7 +654,19 @@ export default function ScheduleDay({ token }) {
             >
               <PatientNameBlock child={child} name={child ? undefined : 'Unknown'} />
               <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '6px' }}>
-                {appt.status} · {appt.priority || 'P2'} · {appt.note || '—'}
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: '999px',
+                    fontWeight: 700,
+                    marginRight: '6px',
+                    ...getSimpleStatusBadgeStyle(appt.status)
+                  }}
+                >
+                  {getSimpleStatusLabel(appt.status)}
+                </span>
+                {appt.priority || 'P2'} · {appt.note || '—'}
               </div>
             </button>
             <div
@@ -612,7 +687,7 @@ export default function ScheduleDay({ token }) {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  setContactModal({ child: child || null });
+                  setContactModal({ child: child || null, appointment: appt || null });
                 }}
               >
                 <PhoneIcon />
@@ -711,6 +786,24 @@ export default function ScheduleDay({ token }) {
       >
         Add appointment
       </button>
+
+      <div className="card" style={{ marginBottom: '12px' }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label>View</label>
+          <select
+            value={statusFilter ?? 'ALL'}
+            onChange={(e) => {
+              const v = e.target.value;
+              setStatusFilter(v === 'ALL' ? null : v);
+            }}
+          >
+            <option value="ALL">All</option>
+            <option value="FOLLOW_UP">Follow-up</option>
+            <option value="SCHEDULED">Scheduled</option>
+            <option value="COMPLETED">Completed</option>
+          </select>
+        </div>
+      </div>
 
       {renderList('AM', amList, amRemaining, 'AM')}
       {renderList('PM', pmList, pmRemaining, 'PM')}
@@ -1016,7 +1109,12 @@ export default function ScheduleDay({ token }) {
         <PatientContactModal
           child={contactModal.child}
           onClose={() => setContactModal(null)}
-          getSmsBody={(c) => `Regarding ${formatChildDisplayName(c)} — appointment ${dateKey}.`}
+          getSmsBody={(c) => {
+            const appt = contactModal.appointment || null;
+            const windowText = appt?.timeWindow === 'PM' ? 'PM' : 'AM';
+            const noteText = appt?.note ? ` Note: ${appt.note}.` : '';
+            return `Hello! Reminder: ${formatChildDisplayName(c)} is scheduled on ${dateKey} (${windowText}) at ${location}. Please arrive 10 minutes early.${noteText} Reply if you need to reschedule.`;
+          }}
         />
       )}
 

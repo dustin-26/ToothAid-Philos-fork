@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import PageHeader from '../components/PageHeader';
 import { addToOutbox, getAllClinicDays, getAppointmentsByClinicDay, syncPush, upsertClinicDay } from '../db/indexedDB';
+import { isActiveBookedSlot } from '../utils/appointmentStatus';
 import { toYmd } from '../utils/dates';
 import { notifyError, notifySuccess } from '../utils/notify';
 
@@ -90,6 +91,18 @@ export default function Schedule({ token }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.key]);
 
+  /** Open month from Home reminder “Pick week on calendar” (YYYY-MM-DD). */
+  useEffect(() => {
+    const anchor = location.state?.openMonthForDate;
+    if (!anchor || typeof anchor !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(anchor)) return;
+    const [y, m, d] = anchor.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    if (Number.isNaN(dt.getTime())) return;
+    setViewYear(dt.getFullYear());
+    setViewMonth(dt.getMonth());
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.state?.openMonthForDate, navigate, location.pathname]);
+
   // Compute month quotas (remaining) from quota records + appointments
   useEffect(() => {
     const run = async () => {
@@ -116,7 +129,7 @@ export default function Schedule({ token }) {
           // Daily quota exists even if 0/0, but month UI hides those.
           const dayId = `clinicday-${dateKey}`;
           const appts = await getAppointmentsByClinicDay(dayId);
-          const used = appts.filter((a) => a.status !== 'CANCELLED');
+          const used = appts.filter(isActiveBookedSlot);
           const amUsed = used.filter((a) => a.timeWindow === 'AM').length;
           const pmUsed = used.filter((a) => a.timeWindow === 'PM').length;
           return [
