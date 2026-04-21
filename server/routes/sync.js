@@ -152,6 +152,13 @@ router.post('/push', authenticateToken, async (req, res) => {
                 ? String(payload.chiefComplaint).trim()
                 : null,
             notes: payload.notes || null,
+            requiresFollowUp: payload.requiresFollowUp === true || payload.requiresFollowUp === 'true',
+            followUpPriority:
+              payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
+                ? ['P0', 'P1', 'P2', 'P3'].includes(String(payload.followUpPriority || '').trim())
+                  ? String(payload.followUpPriority).trim()
+                  : 'P2'
+                : null,
             createdBy: payload.createdBy || username,
             createdAt: payload.createdAt || new Date()
           };
@@ -304,6 +311,20 @@ router.post('/push', authenticateToken, async (req, res) => {
                   : null
                 : existingVisit?.chiefComplaint ?? null,
             notes: payload.notes || null,
+            requiresFollowUp:
+              payload.requiresFollowUp !== undefined
+                ? payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
+                : Boolean(existingVisit?.requiresFollowUp),
+            followUpPriority:
+              payload.requiresFollowUp !== undefined
+                ? payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
+                  ? ['P0', 'P1', 'P2', 'P3'].includes(String(payload.followUpPriority || '').trim())
+                    ? String(payload.followUpPriority).trim()
+                    : 'P2'
+                  : null
+                : existingVisit?.followUpPriority != null
+                  ? String(existingVisit.followUpPriority).trim()
+                  : null,
             updatedBy: payload.updatedBy || username,
             updatedAt: new Date()
           };

@@ -246,6 +246,8 @@ export default function AddVisit({ token }) {
 
   const [chiefComplaint, setChiefComplaint] = useState('');
   const [visitNotes, setVisitNotes] = useState('');
+  const [requiresFollowUp, setRequiresFollowUp] = useState(false);
+  const [followUpPriority, setFollowUpPriority] = useState('P2');
 
   const [dentition, setDentition] = useState('PERMANENT');
   const [toothRecords, setToothRecords] = useState({});
@@ -292,6 +294,8 @@ export default function AddVisit({ token }) {
         setTreatmentBlocks([newTreatmentBlock()]);
         setMedications([]);
         setMedDraft({ name: '', dosage: '', frequencyPerDay: '', days: '' });
+        setRequiresFollowUp(false);
+        setFollowUpPriority('P2');
         setInitializing(false);
         return;
       }
@@ -317,6 +321,12 @@ export default function AddVisit({ token }) {
       setSelectedExamTooth(null);
       setMedications(normalizeMedicationsForForm(v.medications));
       setMedDraft({ name: '', dosage: '', frequencyPerDay: '', days: '' });
+      setRequiresFollowUp(v.requiresFollowUp === true || v.requiresFollowUp === 'true');
+      setFollowUpPriority(
+        v.followUpPriority != null && String(v.followUpPriority).trim() !== ''
+          ? String(v.followUpPriority).trim()
+          : 'P2'
+      );
       setInitializing(false);
     })();
     return () => {
@@ -661,6 +671,8 @@ export default function AddVisit({ token }) {
           treatmentTypes,
           medications: medicationsForSave,
           notes: notesForSave,
+          requiresFollowUp: Boolean(requiresFollowUp),
+          followUpPriority: requiresFollowUp ? followUpPriority : null,
           createdBy: existing.createdBy || username,
           createdAt: existing.createdAt || now,
           updatedBy: username,
@@ -690,6 +702,8 @@ export default function AddVisit({ token }) {
           treatmentTypes,
           medications: medicationsForSave,
           notes: notesForSave,
+          requiresFollowUp: Boolean(requiresFollowUp),
+          followUpPriority: requiresFollowUp ? followUpPriority : null,
           createdBy: username,
           createdAt: now
         };
@@ -1130,6 +1144,51 @@ export default function AddVisit({ token }) {
             placeholder="General notes for this visit…"
           />
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: '12px' }}>
+        <h3 style={{ marginTop: 0, marginBottom: '10px' }}>Follow-up appointment</h3>
+        <p style={{ fontSize: '13px', color: 'var(--color-muted)', margin: '0 0 12px', lineHeight: 1.45 }}>
+          Flag when this patient still needs a return visit booked. P0 / P1 items appear on the Home dashboard under
+          Emergency; P2 / P3 under Schedule follow-ups until you add an appointment.
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '12px' }}>
+          <input
+            type="checkbox"
+            checked={requiresFollowUp}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setRequiresFollowUp(on);
+              if (!on) setFollowUpPriority('P2');
+            }}
+          />
+          <span style={{ fontWeight: 650 }}>Requires follow-up appointment</span>
+        </label>
+        {requiresFollowUp && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Follow-up priority</label>
+            <select
+              value={followUpPriority}
+              onChange={(e) => setFollowUpPriority(e.target.value)}
+              className="form-control"
+            >
+              <option value="P0">P0 — Emergency</option>
+              <option value="P1">P1 — Urgent</option>
+              <option value="P2">P2 — Routine</option>
+              <option value="P3">P3 — When convenient</option>
+            </select>
+            {(followUpPriority === 'P0' || followUpPriority === 'P1') && (
+              <p style={{ fontSize: '12px', color: '#b45309', margin: '8px 0 0', fontWeight: 600 }}>
+                This will show on Home → Reminders & follow-ups → Emergency after you save.
+              </p>
+            )}
+            {(followUpPriority === 'P2' || followUpPriority === 'P3') && (
+              <p style={{ fontSize: '12px', color: 'var(--color-muted)', margin: '8px 0 0' }}>
+                After save, use Schedule follow-up on Home to book the next slot.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <button type="button" className="btn btn-primary btn-block" disabled={saving} onClick={submit}>

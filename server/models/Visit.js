@@ -87,6 +87,23 @@ const visitSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  requiresFollowUp: {
+    type: Boolean,
+    default: false
+  },
+  followUpPriority: {
+    type: String,
+    default: null
+  },
+  updatedBy: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  updatedAt: {
+    type: Date,
+    default: null
+  },
   createdBy: {
     type: String,
     required: true,
