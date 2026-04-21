@@ -2,7 +2,8 @@
  * Build treatment summary data from visits (filtered by month/year).
  * Report structure is derived from TREATMENT_OPTIONS so it stays in sync with treatment types.
  */
-import { TREATMENT_OPTIONS } from './treatmentTypes';
+import { TREATMENT_OPTIONS, TREATMENT_CHART_LABELS, getTreatmentCategoryAndValue } from './treatmentTypes';
+import { getAllChildren } from '../db/indexedDB';
 
 /**
  * Filter visits to those in the given month (1-12) and year.
@@ -19,6 +20,70 @@ export function filterVisitsByMonthYear(visits, month, year) {
  */
 export function filterVisitsByYear(visits, year) {
   return visits.filter((v) => new Date(v.date).getFullYear() === year);
+}
+
+/**
+ * Inclusive date range on calendar day (local).
+ */
+export function filterVisitsByDateRange(visits, fromYmd, toYmd) {
+  if (!fromYmd || !toYmd) return visits;
+  const fromD = new Date(fromYmd);
+  const toD = new Date(toYmd);
+  if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) return visits;
+  fromD.setHours(0, 0, 0, 0);
+  toD.setHours(23, 59, 59, 999);
+  return visits.filter((v) => {
+    const d = new Date(v.date);
+    return !Number.isNaN(d.getTime()) && d >= fromD && d <= toD;
+  });
+}
+
+function mondayOfWeekContaining(d) {
+  const x = new Date(d);
+  const day = x.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function sortTreatmentCategoryList(categorySet) {
+  const known = TREATMENT_CHART_LABELS.filter((l) => categorySet.has(l));
+  const extras = [...categorySet].filter((c) => !TREATMENT_CHART_LABELS.includes(c));
+  extras.sort((a, b) => a.localeCompare(b));
+  return [...known, ...extras];
+}
+
+function buildVisitsByPeriodForExport(exportRange, month, year, visits) {
+  const out = [];
+  if (exportRange === 'monthly') {
+    const slots = 5;
+    const counts = Array(slots).fill(0);
+    visits.forEach((v) => {
+      const d = new Date(v.date);
+      if (d.getFullYear() !== year || d.getMonth() + 1 !== month || Number.isNaN(d.getTime())) return;
+      const slot = Math.min(slots - 1, Math.floor((d.getDate() - 1) / 7));
+      counts[slot] += 1;
+    });
+    for (let i = 0; i < slots; i++) {
+      const firstDayOfSlot = new Date(year, month - 1, i * 7 + 1);
+      const mon = mondayOfWeekContaining(firstDayOfSlot);
+      const monStr = mon.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+      out.push({ label: `Week ${i + 1} (Mon ${monStr})`, count: counts[i] });
+    }
+  } else {
+    const counts = Array(12).fill(0);
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    visits.forEach((v) => {
+      const d = new Date(v.date);
+      if (d.getFullYear() !== year || Number.isNaN(d.getTime())) return;
+      counts[d.getMonth()] += 1;
+    });
+    for (let i = 0; i < 12; i++) {
+      out.push({ label: monthNames[i], count: counts[i] });
+    }
+  }
+  return out;
 }
 
 /**
@@ -55,6 +120,9 @@ const REPORT_ROW_LABELS = Object.fromEntries(REPORT_ROW_SPEC.map((r) => [r.key, 
 function parseTreatmentForReport(t) {
   const s = (t || '').trim();
   if (!s) return null;
+
+  const toothScoped = s.match(/^Tooth\s+[^:]+:\s*(.+)$/i);
+  if (toothScoped) return parseTreatmentForReport(toothScoped[1].trim());
 
   // Extraction (Permanent: X, Temporary: Y) or (Permanent: X) or (Temporary: Y) or legacy
   if (s.startsWith('Extraction (')) {
@@ -190,17 +258,24 @@ export function aggregateTreatmentsFromVisits(visits) {
  * @param {number} month - 1-12 (used when range === 'monthly')
  * @param {number} year - e.g. 2025
  */
-export async function downloadTreatmentSummaryExcel(visits, range, month, year) {
+/**
+ * @param {object} [options]
+ * @param {{ from: string, to: string }} [options.dashboardDateFilter] — intersect with export month/year
+ */
+export async function downloadTreatmentSummaryExcel(visits, range, month, year, options = {}) {
+  const { dashboardDateFilter } = options;
   const XLSX = await import('xlsx');
   const lib = XLSX.default || XLSX;
-  const filtered = range === 'yearly'
+  let filtered = range === 'yearly'
     ? filterVisitsByYear(visits, year)
     : filterVisitsByMonthYear(visits, month, year);
+  if (dashboardDateFilter?.from && dashboardDateFilter?.to) {
+    filtered = filterVisitsByDateRange(filtered, dashboardDateFilter.from, dashboardDateFilter.to);
+  }
   const aggregated = aggregateTreatmentsDetailed(filtered);
   const rows = range === 'yearly'
     ? buildSummaryRowsForYear(aggregated, year)
     : buildSummaryRows(aggregated, month, year);
-  // Add total visits row at the end
   rows.push([]);
   rows.push(['Total visits in period', filtered.length]);
 
@@ -209,6 +284,89 @@ export async function downloadTreatmentSummaryExcel(visits, range, month, year) 
   ws['!cols'] = colWidths;
   const wb = lib.utils.book_new();
   lib.utils.book_append_sheet(wb, ws, 'Treatment Summary');
+
+  const children = await getAllChildren();
+  const childMap = Object.fromEntries(children.map((c) => [c.childId, c]));
+
+  const monthNamesLong = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const periodTitle =
+    range === 'yearly'
+      ? `Dataset overview — ${year}`
+      : `Dataset overview — ${monthNamesLong[month - 1]} ${year}`;
+  const overviewRows = [[periodTitle], []];
+  if (dashboardDateFilter?.from && dashboardDateFilter?.to) {
+    overviewRows.push(['Additional date filter (intersect)', `${dashboardDateFilter.from} to ${dashboardDateFilter.to}`]);
+    overviewRows.push([]);
+  }
+  overviewRows.push(['Total visits (export scope)', filtered.length]);
+  overviewRows.push(['Distinct children with visits', new Set(filtered.map((v) => v.childId)).size]);
+  overviewRows.push([
+    'Distinct schools (from visits)',
+    new Set(
+      filtered.map((v) => childMap[v.childId]?.school).filter(Boolean)
+    ).size
+  ]);
+  overviewRows.push([]);
+
+  overviewRows.push(['Visits by school', 'Count']);
+  const visitCountBySchool = {};
+  filtered.forEach((v) => {
+    const sch = childMap[v.childId]?.school;
+    if (sch) visitCountBySchool[sch] = (visitCountBySchool[sch] || 0) + 1;
+  });
+  Object.entries(visitCountBySchool)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([school, count]) => overviewRows.push([school, count]));
+
+  overviewRows.push([]);
+  overviewRows.push([
+    range === 'monthly' ? 'Visits by week (Mon = week of)' : 'Visits by month',
+    'Count'
+  ]);
+  buildVisitsByPeriodForExport(range, month, year, filtered).forEach((row) => {
+    overviewRows.push([row.label, row.count]);
+  });
+
+  overviewRows.push([]);
+  overviewRows.push(['Treatment category (same logic as dashboard)', 'Count']);
+  const treatmentCategorySet = new Set();
+  filtered.forEach((visit) => {
+    if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
+      visit.treatmentTypes.forEach((treatment) => {
+        const parsed = getTreatmentCategoryAndValue(treatment);
+        if (parsed) treatmentCategorySet.add(parsed.category);
+      });
+    }
+  });
+  const treatmentStackKeys = sortTreatmentCategoryList(treatmentCategorySet);
+  const treatmentsByTypeCounts = {};
+  treatmentStackKeys.forEach((k) => {
+    treatmentsByTypeCounts[k] = 0;
+  });
+  filtered.forEach((visit) => {
+    if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
+      visit.treatmentTypes.forEach((treatment) => {
+        const parsed = getTreatmentCategoryAndValue(treatment);
+        if (parsed && treatmentsByTypeCounts[parsed.category] != null) {
+          treatmentsByTypeCounts[parsed.category] += parsed.value;
+        } else if (parsed) {
+          treatmentsByTypeCounts[parsed.category] = (treatmentsByTypeCounts[parsed.category] || 0) + parsed.value;
+        }
+      });
+    }
+  });
+  treatmentStackKeys.forEach((type) => {
+    const c = treatmentsByTypeCounts[type] || 0;
+    if (c > 0) overviewRows.push([type, c]);
+  });
+
+  const ws2 = lib.utils.aoa_to_sheet(overviewRows);
+  ws2['!cols'] = [{ wch: 48 }, { wch: 14 }];
+  lib.utils.book_append_sheet(wb, ws2, 'Dashboard overview');
+
   const fileName = range === 'yearly'
     ? `treatment-summary-${year}.xlsx`
     : `treatment-summary-${year}-${String(month).padStart(2, '0')}.xlsx`;

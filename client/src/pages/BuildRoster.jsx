@@ -606,7 +606,7 @@ const BuildRoster = ({ token }) => {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <PatientNameBlock child={item.child} nameTag="h3" />
                     <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px', marginTop: '8px' }}>
-                      {item.child?.school || 'No school'} • {item.child?.grade || 'No grade'} • {item.child?.barangay}
+                      {item.child?.school || 'No school'} • {item.child?.grade || 'No grade'}
                     </p>
                     {item.tierName && (
                       <p style={{ fontSize: '13px', marginBottom: '4px' }}>
@@ -726,7 +726,6 @@ const BuildRoster = ({ token }) => {
             )}
             <p style={{ margin: '4px 0' }}><strong>School:</strong> {viewChildDetail.child.school}</p>
             {viewChildDetail.child.grade && <p style={{ margin: '4px 0' }}><strong>Grade:</strong> {viewChildDetail.child.grade}</p>}
-            <p style={{ margin: '4px 0' }}><strong>Barangay:</strong> {viewChildDetail.child.barangay}</p>
             {viewChildDetail.child.guardianPhone && <p style={{ margin: '4px 0' }}><strong>Guardian Phone:</strong> {viewChildDetail.child.guardianPhone}</p>}
             <p style={{ margin: '4px 0' }}>
               <strong>Notes:</strong>{' '}

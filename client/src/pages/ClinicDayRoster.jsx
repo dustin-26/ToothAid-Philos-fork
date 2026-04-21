@@ -335,7 +335,7 @@ const ClinicDayRoster = ({ token }) => {
                   </p>
                   {child && (
                     <p style={{ color: '#666', fontSize: '13px', margin: 0 }}>
-                      {child.grade || 'No grade'} • {child.barangay}
+                      {child.grade || 'No grade'}
                     </p>
                   )}
                   {child?.guardianPhone && (

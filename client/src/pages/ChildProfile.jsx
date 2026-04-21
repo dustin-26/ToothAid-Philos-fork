@@ -20,8 +20,17 @@ import { formatChildDisplayName } from '../utils/displayName';
 import { notifyError, notifySuccess } from '../utils/notify';
 import {
   CHILD_SCHOOL_PRESETS,
-  CHILD_SCHOOL_UI_OTHER
+  CHILD_SCHOOL_UI_OTHER,
+  CHILD_SCHOOL_GROUPS
 } from '../constants/childSchools';
+import { API_BASE_URL } from '../config';
+import { PARENT_FORM_FIELD_DEFS } from '../constants/parentFormFields';
+import PriorityColorButtons from '../components/PriorityColorButtons';
+import EditableChipList from '../components/EditableChipList';
+import { getPriorityPillStyle } from '../utils/priorityUi';
+
+const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
+const MEDICAL_OTHER_NOTE_PRESETS = ['Asthma', 'ADHD', 'Takes regular medication'];
 import { generateUniquePatientId, isValidPatientId, normalizePatientIdInput } from '../utils/patientId';
 import {
   CONDITIONS,
@@ -341,8 +350,14 @@ const ChildProfile = ({ token }) => {
   // Child info: collapse detailed fields in view mode
   const [childDetailsOpen, setChildDetailsOpen] = useState(false);
   const [contactModalOpen, setContactModalOpen] = useState(false);
-  /** True when school is custom (not BES/JCES), including empty field after picking Others. */
+  /** True when school is not a preset, including empty field after picking Others. */
   const [schoolIsOtherMode, setSchoolIsOtherMode] = useState(false);
+  const [showSendFormModal, setShowSendFormModal] = useState(false);
+  const [sendFormFields, setSendFormFields] = useState(() =>
+    Object.fromEntries(PARENT_FORM_FIELD_DEFS.map((f) => [f.id, true]))
+  );
+  const [generatedFormUrl, setGeneratedFormUrl] = useState('');
+  const [generatingFormUrl, setGeneratingFormUrl] = useState(false);
 
   // Refetch when childId changes or when navigating back to this profile (e.g. from Add Visit)
   useEffect(() => {
@@ -405,14 +420,13 @@ const ChildProfile = ({ token }) => {
     return d.toISOString().split('T')[0];
   };
 
-  const priorityMeta = (p) => {
-    const v = String(p || 'P2').toUpperCase();
-    if (v === 'P0') return { label: 'P0', color: '#EF4444', bg: 'rgba(239,68,68,0.12)' };
-    if (v === 'P1') return { label: 'P1', color: '#F97316', bg: 'rgba(249,115,22,0.12)' };
-    if (v === 'P2') return { label: 'P2', color: '#F59E0B', bg: 'rgba(245,158,11,0.12)' };
-    if (v === 'P3') return { label: 'P3', color: '#10B981', bg: 'rgba(16,185,129,0.12)' };
-    return { label: v, color: '#6B7280', bg: 'rgba(107,114,128,0.12)' };
-  };
+  const emptyMedicalForm = () => ({
+    allergy: '',
+    spedCategory: '',
+    spedOtherDetail: '',
+    behaviourFrankl: '',
+    otherNotes: ''
+  });
 
   const openConsentEditor = () => {
     const general = formatDateForInput(child?.consentGeneralReceivedAt);
@@ -479,6 +493,10 @@ const ChildProfile = ({ token }) => {
     const lastName = ln || (parts.length > 1 ? parts.pop() : '');
     const rawSchool = String(child.school || '').trim();
     setSchoolIsOtherMode(rawSchool.length > 0 && !CHILD_SCHOOL_PRESETS.includes(rawSchool));
+    const mc =
+      child.medicalCondition != null && typeof child.medicalCondition === 'object' && !Array.isArray(child.medicalCondition)
+        ? child.medicalCondition
+        : {};
     setChildFormData({
       firstName,
       lastName,
@@ -488,12 +506,18 @@ const ChildProfile = ({ token }) => {
       school: child.school || '',
       grade: child.grade || '',
       class: child.class || '',
-      barangay: child.barangay || '',
       guardianPhone: child.guardianPhone || '',
       messenger: child.messenger || '',
       patientId: child.patientId || '',
       priority: child.priority || 'P2',
-      notes: child.notes || ''
+      notes: child.notes || '',
+      medicalCondition: {
+        allergy: mc.allergy != null ? String(mc.allergy) : '',
+        spedCategory: mc.spedCategory != null ? String(mc.spedCategory) : '',
+        spedOtherDetail: mc.spedOtherDetail != null ? String(mc.spedOtherDetail) : '',
+        behaviourFrankl: mc.behaviourFrankl != null && mc.behaviourFrankl !== '' ? String(mc.behaviourFrankl) : '',
+        otherNotes: mc.otherNotes != null ? String(mc.otherNotes) : ''
+      }
     });
     setIsEditingChild(true);
     setError('');
@@ -509,7 +533,74 @@ const ChildProfile = ({ token }) => {
       (type === 'text' || type === 'textarea') && name !== 'notes'
         ? String(value).toUpperCase()
         : value;
-    setChildFormData(prev => ({ ...prev, [name]: next }));
+    setChildFormData((prev) => ({ ...prev, [name]: next }));
+  };
+
+  const handleMedicalFormChange = (field, value) => {
+    setChildFormData((prev) => ({
+      ...prev,
+      medicalCondition: { ...(prev.medicalCondition || emptyMedicalForm()), [field]: value }
+    }));
+  };
+
+  const applyQuickPriority = async (p) => {
+    if (!child) return;
+    setSavingChild(true);
+    setError('');
+    try {
+      const username = localStorage.getItem('username') || 'unknown';
+      const now = new Date().toISOString();
+      const updatedChild = { ...child, priority: p, updatedBy: username, updatedAt: now };
+      await upsertChild(updatedChild);
+      await addToOutbox('UPSERT_CHILD', childId, updatedChild);
+      if (navigator.onLine && token) {
+        try {
+          await performSync(token);
+        } catch (syncError) {
+          console.error('Sync failed:', syncError);
+        }
+      }
+      setChild(updatedChild);
+      notifySuccess('Priority updated.');
+    } catch (err) {
+      notifyError(err?.message || 'Could not update priority');
+    } finally {
+      setSavingChild(false);
+    }
+  };
+
+  const createParentFormLink = async () => {
+    const fields = Object.fromEntries(
+      PARENT_FORM_FIELD_DEFS.map((f) => [f.id, Boolean(sendFormFields[f.id])])
+    );
+    if (!Object.values(fields).some(Boolean)) {
+      notifyError('Select at least one field.');
+      return;
+    }
+    setGeneratingFormUrl(true);
+    setGeneratedFormUrl('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/parent-form`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ childId, fields })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        notifyError(data.error || 'Could not create link.');
+        return;
+      }
+      const url = `${window.location.origin}/parent-form/${data.token}`;
+      setGeneratedFormUrl(url);
+      notifySuccess('Link created. Copy and send it to the guardian.');
+    } catch (e) {
+      notifyError('Could not create link. Are you online?');
+    } finally {
+      setGeneratingFormUrl(false);
+    }
   };
 
   const handleGeneratePatientId = async () => {
@@ -594,13 +685,27 @@ const ChildProfile = ({ token }) => {
         school: schoolTrim,
         grade: childFormData.grade.trim() || null,
         class: (childFormData.class || '').trim() || null,
-        barangay: childFormData.barangay.trim(),
+        barangay: '',
         guardianPhone: childFormData.guardianPhone.trim() || null,
         messenger: (childFormData.messenger || '').trim() || null,
         priority: childFormData.priority || 'P2',
         notes: childFormData.notes.trim() || null,
         updatedBy: username,
         updatedAt: now
+      };
+
+      const rawMc = childFormData.medicalCondition || {};
+      const bf =
+        rawMc.behaviourFrankl !== '' && rawMc.behaviourFrankl != null
+          ? parseInt(String(rawMc.behaviourFrankl), 10)
+          : null;
+      const sped = String(rawMc.spedCategory || '').trim().toLowerCase();
+      updatedChild.medicalCondition = {
+        allergy: (rawMc.allergy || '').trim() || null,
+        spedCategory: ['deaf', 'autism', 'others'].includes(sped) ? sped : null,
+        spedOtherDetail: (rawMc.spedOtherDetail || '').trim() || null,
+        behaviourFrankl: Number.isFinite(bf) && bf >= 1 && bf <= 4 ? bf : null,
+        otherNotes: (rawMc.otherNotes || '').trim() || null
       };
 
       await upsertChild(updatedChild);
@@ -708,7 +813,7 @@ const ChildProfile = ({ token }) => {
       <PageHeader
         title={formatChildDisplayName(child)}
         secondaryTitle={child.patientId ? `ID ${child.patientId}` : 'ID —'}
-        subtitle={`${child.school} • ${child.barangay}`}
+        subtitle={`${child.school}${child.grade ? ` · ${child.grade}` : ''}`}
         icon="profile"
       />
 
@@ -720,6 +825,25 @@ const ChildProfile = ({ token }) => {
           <h2 style={{ fontSize: '18px', margin: 0 }}>Child Information</h2>
           {!isEditingChild && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSendFormModal(true);
+                  setGeneratedFormUrl('');
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  background: '#ecfdf5',
+                  color: '#047857',
+                  border: '1px solid #6ee7b7',
+                  borderRadius: '20px',
+                  cursor: 'pointer',
+                  fontWeight: '500'
+                }}
+              >
+                Send a form
+              </button>
               <button
                 type="button"
                 onClick={() => setContactModalOpen(true)}
@@ -870,12 +994,16 @@ const ChildProfile = ({ token }) => {
                 <option value="" disabled>
                   Select school
                 </option>
-                {CHILD_SCHOOL_PRESETS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
+                {CHILD_SCHOOL_GROUPS.map((g) => (
+                  <optgroup key={g.district} label={g.district}>
+                    {g.schools.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
-                <option value={CHILD_SCHOOL_UI_OTHER}>Others</option>
+                <option value={CHILD_SCHOOL_UI_OTHER}>Other (specify)</option>
               </select>
               {schoolIsOtherMode ? (
                 <input
@@ -893,21 +1021,14 @@ const ChildProfile = ({ token }) => {
             <div className="form-group">
               <label>Grade</label>
               <select name="grade" value={childFormData.grade} onChange={handleChildFormChange}>
-                <option value="">Select Grade</option>
+                <option value="">Select grade</option>
                 <option value="Kindergarten">Kindergarten</option>
-                <option value="1st Grade">1st Grade</option>
-                <option value="2nd Grade">2nd Grade</option>
-                <option value="3rd Grade">3rd Grade</option>
-                <option value="4th Grade">4th Grade</option>
-                <option value="5th Grade">5th Grade</option>
-                <option value="6th Grade">6th Grade</option>
-                <option value="SPED Kinder/Prep">SPED Kinder/Prep</option>
-                <option value="SPED I">SPED I</option>
-                <option value="SPED II">SPED II</option>
-                <option value="SPED III">SPED III</option>
-                <option value="SPED IV">SPED IV</option>
-                <option value="SPED V">SPED V</option>
-                <option value="SPED VI">SPED VI</option>
+                <option value="Grade 1">Grade 1</option>
+                <option value="Grade 2">Grade 2</option>
+                <option value="Grade 3">Grade 3</option>
+                <option value="Grade 4">Grade 4</option>
+                <option value="Grade 5">Grade 5</option>
+                <option value="Grade 6">Grade 6</option>
               </select>
             </div>
 
@@ -921,15 +1042,116 @@ const ChildProfile = ({ token }) => {
               />
             </div>
 
-            <div className="form-group">
-              <label>Barangay *</label>
-              <input
-                type="text"
-                name="barangay"
-                value={childFormData.barangay}
-                onChange={handleChildFormChange}
-                required
-              />
+            <div
+              className="form-group"
+              style={{
+                border: '2px solid #22c55e',
+                borderRadius: 12,
+                padding: 14,
+                background: 'rgba(34, 197, 94, 0.04)'
+              }}
+            >
+              <h3 style={{ margin: '0 0 12px', fontSize: '16px', color: '#14532d' }}>Medical condition</h3>
+              <div className="form-group">
+                <label>Allergy</label>
+                <textarea
+                  rows={2}
+                  value={childFormData.medicalCondition?.allergy ?? ''}
+                  onChange={(e) => handleMedicalFormChange('allergy', e.target.value)}
+                  placeholder="Food or drug allergies, or “None”."
+                />
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: 6 }}>
+                    Quick phrases (tap to insert; long-press to edit shortcuts)
+                  </div>
+                  <EditableChipList
+                    storageKey="toothaid_presets_medical_allergy"
+                    defaultList={MEDICAL_ALLERGY_PRESETS}
+                    mode="apply"
+                    onApply={(name) => {
+                      const cur = (childFormData.medicalCondition?.allergy ?? '').trim();
+                      handleMedicalFormChange('allergy', cur ? `${cur}, ${name}` : name);
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>SPED</label>
+                <select
+                  value={childFormData.medicalCondition?.spedCategory ?? ''}
+                  onChange={(e) => handleMedicalFormChange('spedCategory', e.target.value)}
+                >
+                  <option value="">—</option>
+                  <option value="deaf">Deaf / hard of hearing</option>
+                  <option value="autism">Autism spectrum</option>
+                  <option value="others">Other</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>SPED (other details)</label>
+                <input
+                  type="text"
+                  value={childFormData.medicalCondition?.spedOtherDetail ?? ''}
+                  onChange={(e) => handleMedicalFormChange('spedOtherDetail', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Behaviour (Frankl scale)</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {[1, 2, 3, 4].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => handleMedicalFormChange('behaviourFrankl', String(n))}
+                      style={{
+                        flex: '1 1 64px',
+                        padding: '10px 8px',
+                        borderRadius: 10,
+                        border:
+                          String(childFormData.medicalCondition?.behaviourFrankl) === String(n)
+                            ? '2px solid #2563eb'
+                            : '1px solid #e5e7eb',
+                        background:
+                          String(childFormData.medicalCondition?.behaviourFrankl) === String(n) ? '#eff6ff' : '#fff',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => handleMedicalFormChange('behaviourFrankl', '')}
+                    className="btn btn-secondary"
+                    style={{ flex: '1 1 80px' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Other notes</label>
+                <textarea
+                  rows={2}
+                  value={childFormData.medicalCondition?.otherNotes ?? ''}
+                  onChange={(e) => handleMedicalFormChange('otherNotes', e.target.value)}
+                />
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: 6 }}>
+                    Quick phrases (tap to append line; long-press to edit shortcuts)
+                  </div>
+                  <EditableChipList
+                    storageKey="toothaid_presets_medical_other_notes"
+                    defaultList={MEDICAL_OTHER_NOTE_PRESETS}
+                    mode="apply"
+                    onApply={(name) => {
+                      const cur = (childFormData.medicalCondition?.otherNotes ?? '').trim();
+                      handleMedicalFormChange('otherNotes', cur ? `${cur}\n${name}` : name);
+                    }}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="form-group">
@@ -953,15 +1175,12 @@ const ChildProfile = ({ token }) => {
               />
             </div>
 
-            <div className="form-group">
-              <label>Priority</label>
-              <select name="priority" value={childFormData.priority} onChange={handleChildFormChange}>
-                <option value="P0">P0</option>
-                <option value="P1">P1</option>
-                <option value="P2">P2</option>
-                <option value="P3">P3</option>
-              </select>
-            </div>
+            <PriorityColorButtons
+              label="Priority"
+              value={childFormData.priority}
+              onChange={(p) => setChildFormData((prev) => ({ ...prev, priority: p }))}
+              disabled={savingChild}
+            />
 
             <div className="form-group">
               <label>Notes (optional)</label>
@@ -1003,13 +1222,13 @@ const ChildProfile = ({ token }) => {
               <div
                 className="badge-pill"
                 style={{
-                  background: priorityMeta(child.priority).bg,
-                  color: priorityMeta(child.priority).color,
+                  background: getPriorityPillStyle(child.priority).bg,
+                  color: getPriorityPillStyle(child.priority).color,
                   fontSize: '12px',
                   alignSelf: 'flex-start'
                 }}
               >
-                {priorityMeta(child.priority).label}
+                {getPriorityPillStyle(child.priority).label}
               </div>
             </div>
             <p style={{ fontSize: '14px', color: 'var(--color-muted)', margin: '0 0 12px' }}>
@@ -1051,7 +1270,6 @@ const ChildProfile = ({ token }) => {
                 <p><strong>School:</strong> {child.school}</p>
                 {child.grade && <p><strong>Grade:</strong> {child.grade}</p>}
                 {child.class && <p><strong>Class:</strong> {child.class}</p>}
-                <p><strong>Barangay:</strong> {child.barangay}</p>
                 {child.guardianPhone && <p><strong>Guardian Phone:</strong> {child.guardianPhone}</p>}
                 {child.messenger && (
                   <p>
@@ -1275,6 +1493,113 @@ const ChildProfile = ({ token }) => {
         </div>
       )}
 
+      {!isEditingChild ? (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: '18px', margin: '0 0 12px' }}>Condition</h2>
+
+          <div
+            style={{
+              border: '2px solid #22c55e',
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 16,
+              background: 'rgba(34, 197, 94, 0.04)'
+            }}
+          >
+            <h3 style={{ margin: '0 0 10px', fontSize: '15px', color: '#14532d' }}>Medical condition</h3>
+            {(() => {
+              const mc =
+                child?.medicalCondition != null &&
+                typeof child.medicalCondition === 'object' &&
+                !Array.isArray(child.medicalCondition)
+                  ? child.medicalCondition
+                  : {};
+              const spedLabel =
+                mc.spedCategory === 'deaf'
+                  ? 'Deaf / hard of hearing'
+                  : mc.spedCategory === 'autism'
+                    ? 'Autism spectrum'
+                    : mc.spedCategory === 'others'
+                      ? 'Other'
+                      : '—';
+              return (
+                <div style={{ fontSize: '14px', color: '#374151', lineHeight: 1.5 }}>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Allergy:</strong>{' '}
+                    {mc.allergy != null && String(mc.allergy).trim() !== '' ? mc.allergy : '—'}
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>SPED:</strong> {spedLabel}
+                    {mc.spedOtherDetail ? ` — ${mc.spedOtherDetail}` : ''}
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Behaviour (Frankl):</strong>{' '}
+                    {mc.behaviourFrankl != null && mc.behaviourFrankl !== '' ? mc.behaviourFrankl : '—'}
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Other notes:</strong>{' '}
+                    {mc.otherNotes != null && String(mc.otherNotes).trim() !== '' ? mc.otherNotes : '—'}
+                  </p>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: '15px', color: '#374151' }}>Tooth map (current)</h3>
+            <VisitToothMap toothStates={child?.toothStates} />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: '15px', color: '#374151' }}>DMFT (latest visit)</h3>
+            {visits.length > 0 ? (
+              (() => {
+                const lv = visits[0];
+                const D = lv.decayedTeeth;
+                const M = lv.missingTeeth;
+                const F = lv.filledTeeth;
+                const dNum = D != null && D !== '' ? Number(D) : null;
+                const mNum = M != null && M !== '' ? Number(M) : null;
+                const fNum = F != null && F !== '' ? Number(F) : null;
+                const hasAny = dNum != null || mNum != null || fNum != null;
+                const total =
+                  hasAny ? (Number(dNum ?? 0) + Number(mNum ?? 0) + Number(fNum ?? 0)).toString() : '—';
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, fontSize: '14px' }}>
+                    <div>
+                      <span style={{ color: '#6b7280' }}>D (decayed):</span> {dNum != null ? dNum : '—'}
+                    </div>
+                    <div>
+                      <span style={{ color: '#6b7280' }}>M (missing):</span> {mNum != null ? mNum : '—'}
+                    </div>
+                    <div>
+                      <span style={{ color: '#6b7280' }}>F (filled):</span> {fNum != null ? fNum : '—'}
+                    </div>
+                    <div>
+                      <span style={{ color: '#6b7280' }}>Total DMFT:</span> {total}
+                    </div>
+                  </div>
+                );
+              })()
+            ) : (
+              <p style={{ margin: 0, color: '#6b7280', fontSize: '14px' }}>
+                No visits yet — DMFT appears after the first visit.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <h3 style={{ margin: '0 0 8px', fontSize: '15px', color: '#374151' }}>Quick priority</h3>
+            <PriorityColorButtons
+              label=""
+              value={child.priority}
+              onChange={(p) => void applyQuickPriority(p)}
+              disabled={savingChild}
+            />
+          </div>
+        </div>
+      ) : null}
+
       {/* ===== VISIT HISTORY CARD ===== */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '8px', flexWrap: 'wrap' }}>
@@ -1292,8 +1617,6 @@ const ChildProfile = ({ token }) => {
             </Link>
           </div>
         </div>
-
-        <VisitToothMap toothStates={child?.toothStates} />
 
         {visits.length === 0 ? (
           <div className="empty-state">
@@ -1409,6 +1732,71 @@ const ChildProfile = ({ token }) => {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showSendFormModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16
+          }}
+        >
+          <div className="card" style={{ maxWidth: 520, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3 style={{ marginTop: 0 }}>Send a form to guardian</h3>
+            <p style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.45 }}>
+              Choose which fields appear on the public page. The link expires after one submission or after 24 hours.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+              {PARENT_FORM_FIELD_DEFS.map((f) => (
+                <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '14px' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(sendFormFields[f.id])}
+                    onChange={(e) =>
+                      setSendFormFields((prev) => ({ ...prev, [f.id]: e.target.checked }))
+                    }
+                  />
+                  {f.label}
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: '100%', marginBottom: 10 }}
+              disabled={generatingFormUrl}
+              onClick={() => void createParentFormLink()}
+            >
+              {generatingFormUrl ? 'Creating…' : 'Generate link'}
+            </button>
+            {generatedFormUrl ? (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: 6 }}>URL</label>
+                <input readOnly value={generatedFormUrl} style={{ width: '100%', fontSize: '13px' }} />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ width: '100%', marginTop: 8 }}
+                  onClick={() => void navigator.clipboard.writeText(generatedFormUrl)}
+                >
+                  Copy to clipboard
+                </button>
+              </div>
+            ) : null}
+            <button type="button" className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setShowSendFormModal(false)}>
+              Close
+            </button>
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { connectDB } from './db.js';
 import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
+import parentFormRoutes from './routes/parentForm.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +33,7 @@ app.use(express.json());
 // Routes
 app.use('/auth', authRoutes);
 app.use('/sync', syncRoutes);
+app.use('/parent-form', parentFormRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

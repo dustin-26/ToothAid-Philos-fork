@@ -56,6 +56,10 @@ function mergeVisitRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('treatments');
   restoreIfServerMissingOrEmpty('toothExaminations');
   restoreIfServerMissingOrEmpty('toothRecords');
+  restoreIfServerMissingOrEmpty('symptoms');
+  restoreIfServerMissingOrEmpty('examinationNotes', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('toothSpecificTreatments');
+  restoreIfServerMissingOrEmpty('treatmentTypes');
   restoreIfServerMissingOrEmpty('chiefComplaint', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('notes', { treatBlankStringAsEmpty: true });
   if (rest.dentition === undefined || rest.dentition === null) {
@@ -79,6 +83,7 @@ function mergeChildRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('consentSpecific');
   restoreIfServerMissingOrEmpty('patientId', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('notes', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('medicalCondition');
 
   return merged;
 }
@@ -213,7 +218,6 @@ export const searchChildren = async (query) => {
       (child.firstName && child.firstName.toLowerCase().includes(lowerQuery)) ||
       (child.lastName && child.lastName.toLowerCase().includes(lowerQuery)) ||
       (child.school && child.school.toLowerCase().includes(lowerQuery)) ||
-      (child.barangay && child.barangay.toLowerCase().includes(lowerQuery)) ||
       (digitsOnly.length >= 2 &&
         child.patientId &&
         String(child.patientId).includes(digitsOnly))
@@ -311,22 +315,28 @@ export const getVisit = async (visitId) => {
 // Coerce flag to boolean (handles true, "true", 1, and legacy data)
 const asBoolean = (value) => value === true || value === 'true' || value === 1;
 
-// Graduation order: lower = graduates sooner = higher priority (Grade 6 first, then 5… then SPED)
+// Graduation order: lower = graduates sooner = higher priority (Grade 6 first … Kindergarten).
 const GRADUATION_ORDER = {
+  'Grade 6': 0,
+  'Grade 5': 1,
+  'Grade 4': 2,
+  'Grade 3': 3,
+  'Grade 2': 4,
+  'Grade 1': 5,
+  Kindergarten: 6,
   '6th Grade': 0,
   '5th Grade': 1,
   '4th Grade': 2,
   '3rd Grade': 3,
   '2nd Grade': 4,
   '1st Grade': 5,
-  'Kindergarten': 6,
-  'SPED VI': 7,
-  'SPED V': 8,
-  'SPED IV': 9,
-  'SPED III': 10,
-  'SPED II': 11,
-  'SPED I': 12,
-  'SPED Kinder/Prep': 13
+  'SPED VI': 14,
+  'SPED V': 14,
+  'SPED IV': 14,
+  'SPED III': 14,
+  'SPED II': 14,
+  'SPED I': 14,
+  'SPED Kinder/Prep': 14
 };
 export const getGraduationOrder = (grade) => {
   if (grade == null || grade === '') return 99;

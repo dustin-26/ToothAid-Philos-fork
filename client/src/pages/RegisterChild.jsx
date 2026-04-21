@@ -180,7 +180,7 @@ const RegisterChild = ({ token }) => {
             </svg>
             <input
               type="text"
-              placeholder="Search by name, school, or barangay..."
+              placeholder="Search by name, school, or patient ID..."
               value={query}
               onChange={(e) => setQuery(e.target.value.toUpperCase())}
               style={{
@@ -208,7 +208,7 @@ const RegisterChild = ({ token }) => {
                 >
                   <PatientNameBlock child={child} nameTag="h3" />
                   <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px', marginTop: '8px' }}>
-                    {child.school} • {child.barangay}
+                    {child.school}
                   </p>
                   {child.grade && (
                     <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px' }}>
@@ -249,7 +249,7 @@ const RegisterChild = ({ token }) => {
             <div style={{ flex: 1, minWidth: 0 }}>
               <PatientNameBlock child={selectedChild} nameTag="h3" />
               <p style={{ color: '#666', fontSize: '14px', margin: '8px 0 0' }}>
-                {selectedChild.school} • {selectedChild.barangay}
+                {selectedChild.school}
               </p>
             </div>
             <button 

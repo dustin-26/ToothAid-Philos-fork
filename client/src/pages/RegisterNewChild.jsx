@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import {
   CHILD_SCHOOL_PRESETS,
-  CHILD_SCHOOL_UI_OTHER
+  CHILD_SCHOOL_UI_OTHER,
+  CHILD_SCHOOL_GROUPS
 } from '../constants/childSchools';
+import PriorityColorButtons from '../components/PriorityColorButtons';
+import EditableChipList from '../components/EditableChipList';
 import { Link, useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import PageHeader from '../components/PageHeader';
@@ -12,6 +15,9 @@ import { upsertChild, addToOutbox, checkDuplicates, performSync, getAllChildren 
 import { getAgeFromDOB } from '../utils/age';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { generateUniquePatientId, isValidPatientId, normalizePatientIdInput } from '../utils/patientId';
+
+const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
+const MEDICAL_OTHER_NOTE_PRESETS = ['Asthma', 'ADHD', 'Takes regular medication'];
 
 const RegisterNewChild = ({ token }) => {
   const navigate = useNavigate();
@@ -25,12 +31,18 @@ const RegisterNewChild = ({ token }) => {
     school: '',
     grade: '',
     class: '',
-    barangay: '',
     guardianPhone: '',
     messenger: '',
     priority: 'P2',
     notes: '',
-    patientId: ''
+    patientId: '',
+    medicalCondition: {
+      allergy: '',
+      spedCategory: '',
+      spedOtherDetail: '',
+      behaviourFrankl: '',
+      otherNotes: ''
+    }
   });
   const [duplicates, setDuplicates] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -65,7 +77,14 @@ const RegisterNewChild = ({ token }) => {
       return;
     }
     const next = (type === 'text' || type === 'textarea') && name !== 'notes' ? String(value).toUpperCase() : value;
-    setFormData(prev => ({ ...prev, [name]: next }));
+    setFormData((prev) => ({ ...prev, [name]: next }));
+  };
+
+  const handleMedicalChange = (field, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      medicalCondition: { ...prev.medicalCondition, [field]: value }
+    }));
   };
 
   const handleGeneratePatientId = async () => {
@@ -140,7 +159,7 @@ const RegisterNewChild = ({ token }) => {
         school: schoolTrim,
         grade: formData.grade.trim() || null,
         class: formData.class.trim() || null,
-        barangay: formData.barangay.trim(),
+        barangay: '',
         guardianPhone: formData.guardianPhone.trim() || null,
         messenger: formData.messenger.trim() || null,
         priority: formData.priority || 'P2',
@@ -149,6 +168,20 @@ const RegisterNewChild = ({ token }) => {
         updatedBy: username,
         createdAt: now,
         updatedAt: now
+      };
+
+      const rawMc = formData.medicalCondition || {};
+      const bf =
+        rawMc.behaviourFrankl !== '' && rawMc.behaviourFrankl != null
+          ? parseInt(String(rawMc.behaviourFrankl), 10)
+          : null;
+      const sped = String(rawMc.spedCategory || '').trim().toLowerCase();
+      childData.medicalCondition = {
+        allergy: (rawMc.allergy || '').trim() || null,
+        spedCategory: ['deaf', 'autism', 'others'].includes(sped) ? sped : null,
+        spedOtherDetail: (rawMc.spedOtherDetail || '').trim() || null,
+        behaviourFrankl: Number.isFinite(bf) && bf >= 1 && bf <= 4 ? bf : null,
+        otherNotes: (rawMc.otherNotes || '').trim() || null
       };
 
       await upsertChild(childData);
@@ -336,12 +369,16 @@ const RegisterNewChild = ({ token }) => {
               <option value="" disabled>
                 Select school
               </option>
-              {CHILD_SCHOOL_PRESETS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
+              {CHILD_SCHOOL_GROUPS.map((g) => (
+                <optgroup key={g.district} label={g.district}>
+                  {g.schools.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
-              <option value={CHILD_SCHOOL_UI_OTHER}>Others</option>
+              <option value={CHILD_SCHOOL_UI_OTHER}>Other (specify)</option>
             </select>
             {schoolIsOtherMode ? (
               <input
@@ -359,21 +396,14 @@ const RegisterNewChild = ({ token }) => {
           <div className="form-group">
             <label>Grade</label>
             <select name="grade" value={formData.grade} onChange={handleChange}>
-              <option value="" disabled>Select Grade</option>
+              <option value="" disabled>Select grade</option>
               <option value="Kindergarten">Kindergarten</option>
-              <option value="1st Grade">1st Grade</option>
-              <option value="2nd Grade">2nd Grade</option>
-              <option value="3rd Grade">3rd Grade</option>
-              <option value="4th Grade">4th Grade</option>
-              <option value="5th Grade">5th Grade</option>
-              <option value="6th Grade">6th Grade</option>
-              <option value="SPED Kinder/Prep">SPED Kinder/Prep</option>
-              <option value="SPED I">SPED I</option>
-              <option value="SPED II">SPED II</option>
-              <option value="SPED III">SPED III</option>
-              <option value="SPED IV">SPED IV</option>
-              <option value="SPED V">SPED V</option>
-              <option value="SPED VI">SPED VI</option>
+              <option value="Grade 1">Grade 1</option>
+              <option value="Grade 2">Grade 2</option>
+              <option value="Grade 3">Grade 3</option>
+              <option value="Grade 4">Grade 4</option>
+              <option value="Grade 5">Grade 5</option>
+              <option value="Grade 6">Grade 6</option>
             </select>
           </div>
 
@@ -388,15 +418,115 @@ const RegisterNewChild = ({ token }) => {
             />
           </div>
 
-          <div className="form-group">
-            <label>Barangay *</label>
-            <input
-              type="text"
-              name="barangay"
-              value={formData.barangay}
-              onChange={handleChange}
-              required
-            />
+          <div
+            className="form-group"
+            style={{
+              border: '2px solid #22c55e',
+              borderRadius: 12,
+              padding: 14,
+              background: 'rgba(34, 197, 94, 0.04)'
+            }}
+          >
+            <h3 style={{ margin: '0 0 12px', fontSize: '16px', color: '#14532d' }}>Medical condition</h3>
+            <div className="form-group">
+              <label>Allergy</label>
+              <textarea
+                rows={2}
+                value={formData.medicalCondition?.allergy ?? ''}
+                onChange={(e) => handleMedicalChange('allergy', e.target.value)}
+              />
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: 6 }}>
+                  Quick phrases (tap to insert; long-press to edit shortcuts)
+                </div>
+                <EditableChipList
+                  storageKey="toothaid_presets_medical_allergy"
+                  defaultList={MEDICAL_ALLERGY_PRESETS}
+                  mode="apply"
+                  onApply={(name) => {
+                    const cur = (formData.medicalCondition?.allergy ?? '').trim();
+                    handleMedicalChange('allergy', cur ? `${cur}, ${name}` : name);
+                  }}
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>SPED</label>
+              <select
+                value={formData.medicalCondition?.spedCategory ?? ''}
+                onChange={(e) => handleMedicalChange('spedCategory', e.target.value)}
+              >
+                <option value="">—</option>
+                <option value="deaf">Deaf / hard of hearing</option>
+                <option value="autism">Autism spectrum</option>
+                <option value="others">Other</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>SPED (other details)</label>
+              <input
+                type="text"
+                value={formData.medicalCondition?.spedOtherDetail ?? ''}
+                onChange={(e) => handleMedicalChange('spedOtherDetail', e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Behaviour (Frankl scale)</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {[1, 2, 3, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => handleMedicalChange('behaviourFrankl', String(n))}
+                    style={{
+                      flex: '1 1 64px',
+                      padding: '10px 8px',
+                      borderRadius: 10,
+                      border:
+                        String(formData.medicalCondition?.behaviourFrankl) === String(n)
+                          ? '2px solid #2563eb'
+                          : '1px solid #e5e7eb',
+                      background:
+                        String(formData.medicalCondition?.behaviourFrankl) === String(n) ? '#eff6ff' : '#fff',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ flex: '1 1 80px' }}
+                  onClick={() => handleMedicalChange('behaviourFrankl', '')}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Other notes</label>
+              <textarea
+                rows={2}
+                value={formData.medicalCondition?.otherNotes ?? ''}
+                onChange={(e) => handleMedicalChange('otherNotes', e.target.value)}
+              />
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: 6 }}>
+                  Quick phrases (tap to append line; long-press to edit shortcuts)
+                </div>
+                <EditableChipList
+                  storageKey="toothaid_presets_medical_other_notes"
+                  defaultList={MEDICAL_OTHER_NOTE_PRESETS}
+                  mode="apply"
+                  onApply={(name) => {
+                    const cur = (formData.medicalCondition?.otherNotes ?? '').trim();
+                    handleMedicalChange('otherNotes', cur ? `${cur}\n${name}` : name);
+                  }}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="form-group">
@@ -421,15 +551,11 @@ const RegisterNewChild = ({ token }) => {
             />
           </div>
 
-          <div className="form-group">
-            <label>Priority</label>
-            <select name="priority" value={formData.priority} onChange={handleChange}>
-              <option value="P0">P0</option>
-              <option value="P1">P1</option>
-              <option value="P2">P2</option>
-              <option value="P3">P3</option>
-            </select>
-          </div>
+          <PriorityColorButtons
+            value={formData.priority}
+            onChange={(p) => setFormData((prev) => ({ ...prev, priority: p }))}
+            disabled={saving}
+          />
 
           <div className="form-group">
             <label>Notes (optional)</label>

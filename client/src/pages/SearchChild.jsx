@@ -10,6 +10,7 @@ import {
   CHILD_SCHOOL_FILTER_OTHERS,
   isPresetChildSchool
 } from '../constants/childSchools';
+import { getPriorityPillStyle } from '../utils/priorityUi';
 
 const SearchChild = ({ token }) => {
   const navigate = useNavigate();
@@ -78,15 +79,6 @@ const SearchChild = ({ token }) => {
     if (v === 'P2') return 2;
     if (v === 'P3') return 3;
     return 9;
-  };
-
-  const priorityMeta = (p) => {
-    const v = String(p || 'P2').toUpperCase().trim();
-    if (v === 'P0') return { label: 'P0', color: '#EF4444', bg: 'rgba(239,68,68,0.12)' };
-    if (v === 'P1') return { label: 'P1', color: '#F97316', bg: 'rgba(249,115,22,0.12)' };
-    if (v === 'P2') return { label: 'P2', color: '#F59E0B', bg: 'rgba(245,158,11,0.12)' };
-    if (v === 'P3') return { label: 'P3', color: '#10B981', bg: 'rgba(16,185,129,0.12)' };
-    return { label: v || '—', color: '#6B7280', bg: 'rgba(107,114,128,0.12)' };
   };
 
   const filtered = useMemo(() => {
@@ -248,13 +240,13 @@ const SearchChild = ({ token }) => {
                   <div
                     className="badge-pill"
                     style={{
-                      background: priorityMeta(child.priority).bg,
-                      color: priorityMeta(child.priority).color,
+                      background: getPriorityPillStyle(child.priority).bg,
+                      color: getPriorityPillStyle(child.priority).color,
                       fontSize: '12px',
                       alignSelf: 'flex-start'
                     }}
                   >
-                    {priorityMeta(child.priority).label}
+                    {getPriorityPillStyle(child.priority).label}
                   </div>
                 </div>
                 <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px' }}>

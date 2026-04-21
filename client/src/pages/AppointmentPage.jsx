@@ -16,6 +16,7 @@ import { PatientNameBlock } from '../components/PatientNameBlock';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { isActiveBookedSlot } from '../utils/appointmentStatus';
 import { toYmd } from '../utils/dates';
+import PriorityColorButtons from '../components/PriorityColorButtons';
 
 const ymd = (d) => {
   if (typeof d === 'string') {
@@ -386,7 +387,7 @@ export default function AppointmentPage({ token }) {
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>AM / PM</label>
             <select value={timeWindow} onChange={(e) => setTimeWindow(e.target.value)}>
@@ -394,15 +395,7 @@ export default function AppointmentPage({ token }) {
               <option value="PM">PM</option>
             </select>
           </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Priority</label>
-            <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-              <option value="P0">P0</option>
-              <option value="P1">P1</option>
-              <option value="P2">P2</option>
-              <option value="P3">P3</option>
-            </select>
-          </div>
+          <PriorityColorButtons value={priority} onChange={setPriority} disabled={saving} />
         </div>
 
         <div className="form-group" style={{ marginTop: '10px' }}>

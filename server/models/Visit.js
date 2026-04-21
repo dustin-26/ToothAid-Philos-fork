@@ -25,6 +25,21 @@ const visitSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /** Symptom name → days (client); legacy visits may omit */
+  symptoms: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  /** Examination section notes (separate from visit notes) */
+  examinationNotes: {
+    type: String,
+    default: null
+  },
+  /** [{ toothNumber, treatments: string[] }] — per-tooth treatments without examination status */
+  toothSpecificTreatments: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
   decayedTeeth: {
     type: Number,
     default: null

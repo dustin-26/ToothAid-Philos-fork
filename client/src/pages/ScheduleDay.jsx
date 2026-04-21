@@ -19,6 +19,7 @@ import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsS
 import { formatChildDisplayName } from '../utils/displayName';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
+import PriorityColorButtons from '../components/PriorityColorButtons';
 
 const byOrder = (a, b) => {
   const oa = a.order != null ? Number(a.order) : Infinity;
@@ -931,7 +932,7 @@ export default function ScheduleDay({ token }) {
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>AM / PM</label>
                 <select value={pickedWindow} onChange={(e) => setPickedWindow(e.target.value)}>
@@ -939,15 +940,11 @@ export default function ScheduleDay({ token }) {
                   <option value="PM">PM</option>
                 </select>
               </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Priority</label>
-                <select value={pickedPriority} onChange={(e) => setPickedPriority(e.target.value)}>
-                  <option value="P0">P0</option>
-                  <option value="P1">P1</option>
-                  <option value="P2">P2</option>
-                  <option value="P3">P3</option>
-                </select>
-              </div>
+              <PriorityColorButtons
+                value={pickedPriority}
+                onChange={setPickedPriority}
+                disabled={saving}
+              />
             </div>
 
             <div className="form-group" style={{ marginTop: '10px' }}>
@@ -993,7 +990,7 @@ export default function ScheduleDay({ token }) {
               />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>AM / PM</label>
                 <select
@@ -1005,19 +1002,11 @@ export default function ScheduleDay({ token }) {
                   <option value="PM">PM</option>
                 </select>
               </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Priority</label>
-                <select
-                  value={editForm.priority}
-                  onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))}
-                  disabled={saving}
-                >
-                  <option value="P0">P0</option>
-                  <option value="P1">P1</option>
-                  <option value="P2">P2</option>
-                  <option value="P3">P3</option>
-                </select>
-              </div>
+              <PriorityColorButtons
+                value={editForm.priority}
+                onChange={(p) => setEditForm((f) => ({ ...f, priority: p }))}
+                disabled={saving}
+              />
             </div>
 
             <div className="form-group" style={{ marginTop: '10px' }}>

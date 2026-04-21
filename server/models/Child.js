@@ -61,10 +61,15 @@ const childSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
+  /** Deprecated in UI; kept for legacy imports and sync. */
   barangay: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: ''
+  },
+  medicalCondition: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   guardianPhone: {
     type: String,

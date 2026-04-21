@@ -61,7 +61,7 @@ router.post('/push', authenticateToken, async (req, res) => {
             school: p.school,
             grade: p.grade != null && p.grade !== '' ? p.grade : null,
             class: p.class != null && p.class !== '' ? p.class : null,
-            barangay: p.barangay,
+            barangay: p.barangay != null && String(p.barangay).trim() !== '' ? String(p.barangay).trim() : '',
             guardianPhone: p.guardianPhone != null && p.guardianPhone !== '' ? p.guardianPhone : null,
             messenger: p.messenger != null && p.messenger !== '' ? p.messenger : null,
             priority: p.priority != null && p.priority !== '' ? p.priority : 'P2',
@@ -76,6 +76,12 @@ router.post('/push', authenticateToken, async (req, res) => {
                   .filter(e => e.procedure !== '')
               : [],
             notes: p.notes != null && p.notes !== '' ? p.notes : null,
+            medicalCondition:
+              p.medicalCondition != null && typeof p.medicalCondition === 'object' && !Array.isArray(p.medicalCondition)
+                ? p.medicalCondition
+                : existing?.medicalCondition != null && typeof existing.medicalCondition === 'object'
+                  ? existing.medicalCondition
+                  : {},
             toothStates:
               p.toothStates != null && typeof p.toothStates === 'object' && !Array.isArray(p.toothStates)
                 ? p.toothStates
@@ -119,6 +125,19 @@ router.post('/push', authenticateToken, async (req, res) => {
                 ? payload.toothRecords
                 : null,
             toothExaminations: Array.isArray(payload.toothExaminations) ? payload.toothExaminations : null,
+            symptoms:
+              payload.symptoms != null &&
+              typeof payload.symptoms === 'object' &&
+              !Array.isArray(payload.symptoms)
+                ? payload.symptoms
+                : null,
+            examinationNotes:
+              payload.examinationNotes != null && String(payload.examinationNotes).trim() !== ''
+                ? String(payload.examinationNotes).trim()
+                : null,
+            toothSpecificTreatments: Array.isArray(payload.toothSpecificTreatments)
+              ? payload.toothSpecificTreatments
+              : null,
             treatmentTypes: normalizeTreatmentTypes(
               Array.isArray(payload.treatmentTypes) && payload.treatmentTypes.length > 0
                 ? payload.treatmentTypes
@@ -235,6 +254,28 @@ router.post('/push', authenticateToken, async (req, res) => {
               : Array.isArray(existingVisit?.toothExaminations)
                 ? existingVisit.toothExaminations
                 : null,
+            symptoms:
+              payload.symptoms !== undefined
+                ? payload.symptoms != null &&
+                  typeof payload.symptoms === 'object' &&
+                  !Array.isArray(payload.symptoms)
+                  ? payload.symptoms
+                  : null
+                : existingVisit?.symptoms ?? null,
+            examinationNotes:
+              payload.examinationNotes !== undefined
+                ? payload.examinationNotes != null && String(payload.examinationNotes).trim() !== ''
+                  ? String(payload.examinationNotes).trim()
+                  : null
+                : existingVisit?.examinationNotes ?? null,
+            toothSpecificTreatments:
+              payload.toothSpecificTreatments !== undefined
+                ? Array.isArray(payload.toothSpecificTreatments)
+                  ? payload.toothSpecificTreatments
+                  : null
+                : Array.isArray(existingVisit?.toothSpecificTreatments)
+                  ? existingVisit.toothSpecificTreatments
+                  : null,
             treatmentTypes: normalizeTreatmentTypes(
               Array.isArray(payload.treatmentTypes) && payload.treatmentTypes.length > 0
                 ? payload.treatmentTypes

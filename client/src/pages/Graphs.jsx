@@ -12,7 +12,17 @@ import {
   getCumulativeLatestVisits
 } from '../utils/timeBuckets';
 import { TREATMENT_CHART_LABELS, getTreatmentCategoryAndValue } from '../utils/treatmentTypes';
-import { downloadTreatmentSummaryExcel } from '../utils/exportTreatmentSummary';
+import { downloadTreatmentSummaryExcel, filterVisitsByDateRange } from '../utils/exportTreatmentSummary';
+import { toYmd } from '../utils/dates';
+
+function mondayOfWeekContaining(d) {
+  const x = new Date(d);
+  const day = x.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
 
 const Graphs = () => {
   const [loading, setLoading] = useState(true);
@@ -40,7 +50,11 @@ const Graphs = () => {
     totalChildren: 0,
     totalVisits: 0,
     schoolsCovered: 0,
-    dateRange: null // { start: Date, end: Date }
+    dateRange: null,
+    avgDmftParts: null,
+    visitsBySchool: [],
+    visitsByPeriod: [],
+    treatmentCoverage: []
   });
   
   const [chartData, setChartData] = useState({
@@ -50,8 +64,9 @@ const Graphs = () => {
     fDmftRatio: [],                // Chart 3: F/DMFT ratio (monthly)
     treatmentsByType: [],          // Chart 4: Treatments by type (bar)
     treatmentsBySchool: [],        // Chart 5: Treatments by school (stacked bar, top 10)
-    avgDmftBySchool: [],           // Chart 6: Average DMFT by school (bar, top 10)
-    avgDmftOverTime: []            // Chart 7: Average DMFT over time (monthly) - supporting
+    avgDmftBySchool: [],
+    avgDmftOverTime: [],
+    treatmentStackKeys: []
   });
   
   // Store raw visits for pie chart filtering
@@ -65,6 +80,10 @@ const Graphs = () => {
   const [exportMonth, setExportMonth] = useState(now.getMonth() + 1);
   const [exportYear, setExportYear] = useState(now.getFullYear());
   const [exporting, setExporting] = useState(false);
+
+  const [dashFilterEnabled, setDashFilterEnabled] = useState(false);
+  const [dashFrom, setDashFrom] = useState(() => toYmd(new Date(Date.now() - 90 * 86400000)));
+  const [dashTo, setDashTo] = useState(() => toYmd(new Date()));
   
   // Active point state for custom tooltip (only shows when dot is touched directly)
   const [activePoint, setActivePoint] = useState(null); // { chartId, index, x, y, value, label }
@@ -235,10 +254,12 @@ const Graphs = () => {
     const loadData = async () => {
       try {
         const children = await getAllChildren();
-        const visits = await getAllVisits();
-        
-        // Store raw visits for pie chart filtering
-        setAllVisits(visits);
+        const allVisitsRaw = await getAllVisits();
+        setAllVisits(allVisitsRaw);
+        const visits =
+          dashFilterEnabled && dashFrom && dashTo
+            ? filterVisitsByDateRange(allVisitsRaw, dashFrom, dashTo)
+            : allVisitsRaw;
 
         // Create child lookup map
         const childMap = {};
@@ -266,26 +287,75 @@ const Graphs = () => {
         // For each bucket, shows the "current known state" based on each child's latest visit up to that point
         const cumulativeVisits = getCumulativeLatestVisits(visitsWithChildren, bucketKeys, granularity);
 
-        // Compute headline metrics
-        const uniqueSchools = new Set(children.map(c => c.school).filter(Boolean));
-        
-        // Calculate date range from visits
+        const uniqueSchools = new Set(children.map((c) => c.school).filter(Boolean));
+
         let dateRange = null;
-        if (visits.length > 0) {
-          const visitDates = visits.map(v => new Date(v.date)).filter(d => !isNaN(d));
+        if (dashFilterEnabled && dashFrom && dashTo) {
+          const a = new Date(dashFrom);
+          const b = new Date(dashTo);
+          if (!Number.isNaN(a.getTime()) && !Number.isNaN(b.getTime())) {
+            dateRange = { start: a, end: b };
+          }
+        } else if (visits.length > 0) {
+          const visitDates = visits.map((v) => new Date(v.date)).filter((d) => !Number.isNaN(d.getTime()));
           if (visitDates.length > 0) {
             const minDate = new Date(Math.min(...visitDates));
             const maxDate = new Date(Math.max(...visitDates));
             dateRange = { start: minDate, end: maxDate };
           }
         }
-        
-        setMetrics({
-          totalChildren: children.length,
-          totalVisits: visits.length,
-          schoolsCovered: uniqueSchools.size,
-          dateRange
+
+        const visitCountBySchool = {};
+        visits.forEach((v) => {
+          const ch = childMap[v.childId];
+          if (ch?.school) {
+            visitCountBySchool[ch.school] = (visitCountBySchool[ch.school] || 0) + 1;
+          }
         });
+        const visitsBySchool = Object.entries(visitCountBySchool)
+          .map(([school, count]) => ({ school, count }))
+          .sort((a, b) => b.count - a.count);
+
+        let visitsByPeriod = [];
+        if (exportRange === 'monthly') {
+          const y = exportYear;
+          const m = exportMonth;
+          const slots = 5;
+          const counts = Array(slots).fill(0);
+          visits.forEach((v) => {
+            const d = new Date(v.date);
+            if (d.getFullYear() !== y || d.getMonth() + 1 !== m || isNaN(d.getTime())) return;
+            const slot = Math.min(slots - 1, Math.floor((d.getDate() - 1) / 7));
+            counts[slot] += 1;
+          });
+          visitsByPeriod = counts.map((count, i) => {
+            const firstDayOfSlot = new Date(y, m - 1, i * 7 + 1);
+            const mon = mondayOfWeekContaining(firstDayOfSlot);
+            const monStr = mon.toLocaleDateString('en-PH', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric'
+            });
+            return { label: `Week ${i + 1} · Mon ${monStr}`, count };
+          });
+        } else {
+          const y = exportYear;
+          const counts = Array(12).fill(0);
+          visits.forEach((v) => {
+            const d = new Date(v.date);
+            if (d.getFullYear() !== y || isNaN(d.getTime())) return;
+            counts[d.getMonth()] += 1;
+          });
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          visitsByPeriod = counts.map((count, i) => ({ label: monthNames[i], count }));
+        }
+
+        const sortTreatmentCategoryList = (categorySet) => {
+          const known = TREATMENT_CHART_LABELS.filter((l) => categorySet.has(l));
+          const extras = [...categorySet].filter((c) => !TREATMENT_CHART_LABELS.includes(c));
+          extras.sort((a, b) => a.localeCompare(b));
+          return [...known, ...extras];
+        };
 
         // Chart 1: Average Decayed Teeth (D) per child (rolling - latest known state at each point)
         const avgDecayedTeeth = bucketKeys.map(bucketKey => {
@@ -346,42 +416,54 @@ const Graphs = () => {
         });
         assertChartData(fDmftRatio, 'F/DMFT Ratio');
 
-        // Chart 4: Treatments by Type (big titles; Extraction = sum of permanent + temporary teeth)
-        const treatmentsByTypeCounts = {};
-        TREATMENT_CHART_LABELS.forEach(label => { treatmentsByTypeCounts[label] = 0; });
-        visits.forEach(visit => {
+        const treatmentCategorySet = new Set();
+        visits.forEach((visit) => {
           if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
-            visit.treatmentTypes.forEach(treatment => {
+            visit.treatmentTypes.forEach((treatment) => {
               const parsed = getTreatmentCategoryAndValue(treatment);
-              if (parsed && treatmentsByTypeCounts.hasOwnProperty(parsed.category)) {
+              if (parsed) treatmentCategorySet.add(parsed.category);
+            });
+          }
+        });
+        const treatmentStackKeys = sortTreatmentCategoryList(treatmentCategorySet);
+
+        const treatmentsByTypeCounts = {};
+        treatmentStackKeys.forEach((k) => {
+          treatmentsByTypeCounts[k] = 0;
+        });
+        visits.forEach((visit) => {
+          if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
+            visit.treatmentTypes.forEach((treatment) => {
+              const parsed = getTreatmentCategoryAndValue(treatment);
+              if (parsed && treatmentsByTypeCounts[parsed.category] != null) {
                 treatmentsByTypeCounts[parsed.category] += parsed.value;
               } else if (parsed) {
-                treatmentsByTypeCounts['Others'] = (treatmentsByTypeCounts['Others'] || 0) + parsed.value;
+                treatmentsByTypeCounts[parsed.category] = (treatmentsByTypeCounts[parsed.category] || 0) + parsed.value;
               }
             });
           }
         });
-        const treatmentsByType = TREATMENT_CHART_LABELS
-          .map(type => ({ type, count: treatmentsByTypeCounts[type] || 0 }))
-          .filter(item => item.count > 0)
+        const treatmentsByType = treatmentStackKeys
+          .map((type) => ({ type, count: treatmentsByTypeCounts[type] || 0 }))
+          .filter((item) => item.count > 0)
           .sort((a, b) => b.count - a.count);
 
-        // Chart 5: Treatments by School - Stacked bar (big titles; Extraction = sum of teeth)
         const treatmentsBySchoolData = {};
-        visits.forEach(visit => {
+        visits.forEach((visit) => {
           if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
             const child = childMap[visit.childId];
             if (child && child.school) {
               const school = child.school;
               if (!treatmentsBySchoolData[school]) {
                 treatmentsBySchoolData[school] = { school };
-                TREATMENT_CHART_LABELS.forEach(l => { treatmentsBySchoolData[school][l] = 0; });
+                treatmentStackKeys.forEach((k) => {
+                  treatmentsBySchoolData[school][k] = 0;
+                });
               }
-              visit.treatmentTypes.forEach(treatment => {
+              visit.treatmentTypes.forEach((treatment) => {
                 const parsed = getTreatmentCategoryAndValue(treatment);
-                if (parsed) {
-                  const key = treatmentsBySchoolData[school].hasOwnProperty(parsed.category) ? parsed.category : 'Others';
-                  treatmentsBySchoolData[school][key] = (treatmentsBySchoolData[school][key] || 0) + parsed.value;
+                if (parsed && treatmentsBySchoolData[school][parsed.category] != null) {
+                  treatmentsBySchoolData[school][parsed.category] += parsed.value;
                 }
               });
             }
@@ -389,13 +471,13 @@ const Graphs = () => {
         });
 
         const treatmentsBySchool = Object.values(treatmentsBySchoolData)
-          .filter(schoolData => {
+          .filter((schoolData) => {
             const total = Object.values(schoolData)
-              .filter((v, i) => i > 0) // Skip school name
+              .filter((v, i) => i > 0)
               .reduce((sum, count) => sum + count, 0);
             return total > 0;
           })
-          .map(schoolData => ({
+          .map((schoolData) => ({
             ...schoolData,
             total: Object.values(schoolData)
               .filter((v, i) => i > 0)
@@ -403,68 +485,108 @@ const Graphs = () => {
           }))
           .sort((a, b) => b.total - a.total)
           .slice(0, 10)
-          .map(({ total, ...rest }) => rest); // Remove total for chart
+          .map(({ total, ...rest }) => rest);
 
-        // Chart 6: Average DMFT by School - Bar chart (top 10)
-        // Use overall latest visit per child (not monthly)
         const latestVisitsByChild = {};
-        visitsWithChildren.forEach(visit => {
+        visitsWithChildren.forEach((visit) => {
           const childId = visit.childId;
-          if (!latestVisitsByChild[childId] || 
-              visit.visitDate > latestVisitsByChild[childId].visitDate) {
+          if (!latestVisitsByChild[childId] || visit.visitDate > latestVisitsByChild[childId].visitDate) {
             latestVisitsByChild[childId] = visit;
           }
         });
 
         const latestVisits = Object.values(latestVisitsByChild);
 
-        // Chart 0: % of children with 0 decayed teeth per grade (bar chart)
+        let sumDAll = 0;
+        let sumMAll = 0;
+        let sumFAll = 0;
+        latestVisits.forEach((v) => {
+          sumDAll += v.decayedTeeth ?? 0;
+          sumMAll += v.missingTeeth ?? 0;
+          sumFAll += v.filledTeeth ?? 0;
+        });
+        const ncLatest = latestVisits.length;
+        const avgDmftParts =
+          ncLatest > 0
+            ? {
+                avgD: parseFloat((sumDAll / ncLatest).toFixed(2)),
+                avgM: parseFloat((sumMAll / ncLatest).toFixed(2)),
+                avgF: parseFloat((sumFAll / ncLatest).toFixed(2)),
+                avgTotal: parseFloat(((sumDAll + sumMAll + sumFAll) / ncLatest).toFixed(2))
+              }
+            : null;
+
+        setMetrics({
+          totalChildren: dashFilterEnabled ? new Set(visits.map((v) => v.childId)).size : children.length,
+          totalVisits: visits.length,
+          schoolsCovered: uniqueSchools.size,
+          dateRange,
+          avgDmftParts,
+          visitsBySchool,
+          visitsByPeriod,
+          treatmentCoverage: treatmentsByType
+        });
+
         const byGrade = {};
-        latestVisits.forEach(visit => {
-          const grade = (visit.child && visit.child.grade) ? visit.child.grade : 'Unknown';
+        latestVisits.forEach((visit) => {
+          const grade = visit.child && visit.child.grade ? visit.child.grade : 'Unknown';
           if (!byGrade[grade]) byGrade[grade] = { total: 0, zero: 0 };
           byGrade[grade].total += 1;
           if ((visit.decayedTeeth ?? 0) === 0) byGrade[grade].zero += 1;
         });
-        const grades1to6 = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade', '6th Grade'];
+        const gradesEligible = new Set([
+          'Kindergarten',
+          'Grade 1',
+          'Grade 2',
+          'Grade 3',
+          'Grade 4',
+          'Grade 5',
+          'Grade 6',
+          '1st Grade',
+          '2nd Grade',
+          '3rd Grade',
+          '4th Grade',
+          '5th Grade',
+          '6th Grade'
+        ]);
         const zeroCavitiesByGrade = Object.entries(byGrade)
-          .filter(([grade]) => grades1to6.includes(grade))
+          .filter(([grade]) => gradesEligible.has(grade))
           .map(([grade, { total, zero }]) => ({
             grade,
             pct: total > 0 ? parseFloat(((zero / total) * 100).toFixed(1)) : 0,
             count: zero,
             total
           }))
-          .sort((a, b) => getGraduationOrder(b.grade) - getGraduationOrder(a.grade));
+          .sort((a, b) => getGraduationOrder(a.grade) - getGraduationOrder(b.grade));
 
-        const dmftBySchool = {};
-        const dmftCountBySchool = {};
-        
-        latestVisits.forEach(visit => {
+        const dmftAggBySchool = {};
+        latestVisits.forEach((visit) => {
           if (visit.child && visit.child.school) {
             const school = visit.child.school;
             const D = visit.decayedTeeth ?? 0;
             const M = visit.missingTeeth ?? 0;
             const F = visit.filledTeeth ?? 0;
-            const DMFT = D + M + F;
-            
-            if (!dmftBySchool[school]) {
-              dmftBySchool[school] = 0;
-              dmftCountBySchool[school] = 0;
+            if (!dmftAggBySchool[school]) {
+              dmftAggBySchool[school] = { sumD: 0, sumM: 0, sumF: 0, sumT: 0, n: 0 };
             }
-            dmftBySchool[school] += DMFT;
-            dmftCountBySchool[school] += 1;
+            dmftAggBySchool[school].sumD += D;
+            dmftAggBySchool[school].sumM += M;
+            dmftAggBySchool[school].sumF += F;
+            dmftAggBySchool[school].sumT += D + M + F;
+            dmftAggBySchool[school].n += 1;
           }
         });
 
-        const avgDmftBySchool = Object.keys(dmftBySchool)
-          .map(school => ({
-            school: school,
-            avgDmft: parseFloat(dmftCountBySchool[school] > 0
-              ? (dmftBySchool[school] / dmftCountBySchool[school]).toFixed(2)
-              : 0)
+        const avgDmftBySchool = Object.entries(dmftAggBySchool)
+          .map(([school, a]) => ({
+            school,
+            avgD: a.n ? parseFloat((a.sumD / a.n).toFixed(2)) : 0,
+            avgM: a.n ? parseFloat((a.sumM / a.n).toFixed(2)) : 0,
+            avgF: a.n ? parseFloat((a.sumF / a.n).toFixed(2)) : 0,
+            avgTotal: a.n ? parseFloat((a.sumT / a.n).toFixed(2)) : 0,
+            avgDmft: a.n ? parseFloat((a.sumT / a.n).toFixed(2)) : 0
           }))
-          .sort((a, b) => b.avgDmft - a.avgDmft)
+          .sort((a, b) => b.avgTotal - a.avgTotal)
           .slice(0, 10);
 
         // Chart 7: Average DMFT over time (rolling - latest known state at each point)
@@ -497,7 +619,8 @@ const Graphs = () => {
           treatmentsByType,
           treatmentsBySchool,
           avgDmftBySchool,
-          avgDmftOverTime
+          avgDmftOverTime,
+          treatmentStackKeys
         });
       } catch (error) {
         console.error('Error loading graph data:', error);
@@ -507,7 +630,7 @@ const Graphs = () => {
     };
 
     loadData();
-  }, [granularity]);
+  }, [granularity, exportRange, exportMonth, exportYear, dashFilterEnabled, dashFrom, dashTo]);
 
   // Reset slide when data changes
   useEffect(() => {
@@ -560,12 +683,26 @@ const Graphs = () => {
   }, [exportYearsWithData, exportMonthsWithDataInYear, exportYear, exportMonth, exportRange]);
 
   // % with zero cavities by grade, filtered by selected year (latest visit per child within that year)
-  const grades1to6 = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade', '6th Grade'];
+  const gradesOrderedDisplay = [
+    'Kindergarten',
+    'Grade 1',
+    'Grade 2',
+    'Grade 3',
+    'Grade 4',
+    'Grade 5',
+    'Grade 6',
+    '1st Grade',
+    '2nd Grade',
+    '3rd Grade',
+    '4th Grade',
+    '5th Grade',
+    '6th Grade'
+  ];
   const zeroCavitiesByGradeFiltered = useMemo(() => {
     if (!visitsWithChildren.length) return [];
-    const inYear = visitsWithChildren.filter(v => v.visitDate.getFullYear() === zeroCavitiesYear);
+    const inYear = visitsWithChildren.filter((v) => v.visitDate.getFullYear() === zeroCavitiesYear);
     const latestByChild = {};
-    inYear.forEach(visit => {
+    inYear.forEach((visit) => {
       const childId = visit.childId;
       if (!latestByChild[childId] || visit.visitDate > latestByChild[childId].visitDate) {
         latestByChild[childId] = visit;
@@ -573,14 +710,15 @@ const Graphs = () => {
     });
     const latestVisits = Object.values(latestByChild);
     const byGrade = {};
-    latestVisits.forEach(visit => {
-      const grade = (visit.child && visit.child.grade) ? visit.child.grade : 'Unknown';
+    latestVisits.forEach((visit) => {
+      const grade = visit.child && visit.child.grade ? visit.child.grade : 'Unknown';
       if (!byGrade[grade]) byGrade[grade] = { total: 0, zero: 0 };
       byGrade[grade].total += 1;
       if ((visit.decayedTeeth ?? 0) === 0) byGrade[grade].zero += 1;
     });
-    return grades1to6
-      .map(grade => {
+    return gradesOrderedDisplay
+      .filter((grade) => byGrade[grade])
+      .map((grade) => {
         const data = byGrade[grade] || { total: 0, zero: 0 };
         return {
           grade,
@@ -589,7 +727,7 @@ const Graphs = () => {
           total: data.total
         };
       })
-      .sort((a, b) => getGraduationOrder(b.grade) - getGraduationOrder(a.grade));
+      .sort((a, b) => getGraduationOrder(a.grade) - getGraduationOrder(b.grade));
   }, [visitsWithChildren, zeroCavitiesYear]);
 
   const colors = {
@@ -648,21 +786,19 @@ const Graphs = () => {
   const pieChartData = useMemo(() => {
     if (filteredVisitsForPie.length === 0) return [];
     const counts = {};
-    TREATMENT_CHART_LABELS.forEach(l => { counts[l] = 0; });
-    filteredVisitsForPie.forEach(visit => {
+    filteredVisitsForPie.forEach((visit) => {
       if (visit.treatmentTypes && visit.treatmentTypes.length > 0) {
-        visit.treatmentTypes.forEach(treatment => {
+        visit.treatmentTypes.forEach((treatment) => {
           const parsed = getTreatmentCategoryAndValue(treatment);
           if (parsed) {
-            const key = counts.hasOwnProperty(parsed.category) ? parsed.category : 'Others';
-            counts[key] = (counts[key] || 0) + parsed.value;
+            counts[parsed.category] = (counts[parsed.category] || 0) + parsed.value;
           }
         });
       }
     });
-    return TREATMENT_CHART_LABELS
-      .map((name, i) => ({ name, value: counts[name] || 0, color: schoolColors[i % schoolColors.length] }))
-      .filter(item => item.value > 0)
+    return Object.entries(counts)
+      .map(([name, value], i) => ({ name, value, color: schoolColors[i % schoolColors.length] }))
+      .filter((item) => item.value > 0)
       .sort((a, b) => b.value - a.value);
   }, [filteredVisitsForPie]);
 
@@ -1137,7 +1273,8 @@ const Graphs = () => {
 
       case 'treatmentsBySchool':
         if (chartData.treatmentsBySchool.length === 0) return null;
-        const treatmentLegendItems = TREATMENT_CHART_LABELS.map((label, i) => ({
+        const stackKeys = chartData.treatmentStackKeys?.length ? chartData.treatmentStackKeys : [];
+        const treatmentLegendItems = stackKeys.map((label, i) => ({
           key: label,
           color: schoolColors[i % schoolColors.length]
         }));
@@ -1166,7 +1303,7 @@ const Graphs = () => {
                   labelStyle={{ color: '#666', fontSize: '11px', marginBottom: '2px' }}
                   itemStyle={{ fontWeight: '600' }}
                 />
-                {TREATMENT_CHART_LABELS.map((label, i) => (
+                {stackKeys.map((label, i) => (
                   <Bar key={label} dataKey={label} stackId="a" fill={schoolColors[i % schoolColors.length]} />
                 ))}
               </BarChart>
@@ -1229,8 +1366,8 @@ const Graphs = () => {
         
         return (
           <div className="card" style={{ marginBottom: '20px', minHeight: '300px' }}>
-            <h2 style={{ marginBottom: '16px', fontSize: '18px' }}>Average DMFT by School</h2>
-            <ResponsiveContainer width="100%" height={250} style={{ outline: 'none', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}>
+            <h2 style={{ marginBottom: '16px', fontSize: '18px' }}>Average DMFT by School (D / M / F / Total)</h2>
+            <ResponsiveContainer width="100%" height={280} style={{ outline: 'none', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}>
               <BarChart data={chartData.avgDmftBySchool} margin={{ top: 5, right: 10, bottom: 10, left: -20 }} style={{ outline: 'none' }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis 
@@ -1251,13 +1388,12 @@ const Graphs = () => {
                   }}
                   labelStyle={{ color: '#666', fontSize: '11px', marginBottom: '2px' }}
                   itemStyle={{ color: '#333', fontWeight: '600' }}
-                  formatter={(value) => [value.toFixed(2), 'Average DMFT']}
                 />
-                <Bar dataKey="avgDmft" name="Average DMFT" radius={[8, 8, 0, 0]}>
-                  {chartData.avgDmftBySchool.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={schoolColors[index % schoolColors.length]} />
-                  ))}
-                </Bar>
+                <Legend />
+                <Bar dataKey="avgD" name="Avg D" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="avgM" name="Avg M" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="avgF" name="Avg F" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="avgTotal" name="Avg total DMFT" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
             {/* Custom Legend - Row by Row */}
@@ -1270,7 +1406,7 @@ const Graphs = () => {
               borderTop: '1px solid #e0e0e0'
             }}>
               {chartData.avgDmftBySchool.map((entry, index) => (
-                <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   <div 
                     style={{ 
                       width: '16px', 
@@ -1281,7 +1417,9 @@ const Graphs = () => {
                     }} 
                   />
                   <span style={{ fontSize: '14px', color: '#333' }}>{entry.school}</span>
-                  <span style={{ fontSize: '12px', color: '#888', marginLeft: 'auto' }}>({entry.avgDmft})</span>
+                  <span style={{ fontSize: '12px', color: '#888', marginLeft: 'auto' }}>
+                    D {entry.avgD} · M {entry.avgM} · F {entry.avgF} · Total {entry.avgTotal}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1374,69 +1512,76 @@ const Graphs = () => {
           borderRadius: '12px',
           padding: '14px 16px'
         }}>
+          <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#868e96', lineHeight: 1.45 }}>
+            Visit time breakdown uses the <strong>Export</strong> month, year, and range (monthly = by week within that month; yearly = by month within that year). Week labels show the Monday of that bucket.
+          </p>
+          <div
+            style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              background: '#fff',
+              border: '1px solid #e9ecef',
+              borderRadius: 8
+            }}
+          >
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '13px', fontWeight: 600, color: '#495057' }}>
+              <input
+                type="checkbox"
+                checked={dashFilterEnabled}
+                onChange={(e) => setDashFilterEnabled(e.target.checked)}
+              />
+              Custom date range (filters overview metrics & charts below)
+            </label>
+            {dashFilterEnabled && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10, alignItems: 'flex-end' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '12px', color: '#6c757d' }}>From</label>
+                  <input
+                    type="date"
+                    className="form-control"
+                    value={dashFrom}
+                    onChange={(e) => setDashFrom(e.target.value)}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '12px', color: '#6c757d' }}>To</label>
+                  <input
+                    type="date"
+                    className="form-control"
+                    value={dashTo}
+                    onChange={(e) => setDashTo(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
           <div style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
             gap: '10px 16px'
           }}>
             <div style={{ padding: '6px 8px' }}>
-              <div style={{ 
-                fontSize: '20px', 
-                fontWeight: '600', 
-                color: '#495057',
-                lineHeight: 1
-              }}>
+              <div style={{ fontSize: '20px', fontWeight: '600', color: '#495057', lineHeight: 1 }}>
                 {metrics.totalChildren}
               </div>
-              <div style={{ 
-                fontSize: '13px', 
-                color: '#6c757d',
-                marginTop: '2px'
-              }}>
-                Total Children
+              <div style={{ fontSize: '13px', color: '#6c757d', marginTop: '2px' }}>
+                {dashFilterEnabled ? 'Children (visits in range)' : 'Total children'}
               </div>
             </div>
             <div style={{ padding: '6px 8px' }}>
-              <div style={{ 
-                fontSize: '20px', 
-                fontWeight: '600', 
-                color: '#495057',
-                lineHeight: 1
-              }}>
+              <div style={{ fontSize: '20px', fontWeight: '600', color: '#495057', lineHeight: 1 }}>
                 {metrics.totalVisits}
               </div>
-              <div style={{ 
-                fontSize: '13px', 
-                color: '#6c757d',
-                marginTop: '2px'
-              }}>
-                Total Visits
-              </div>
+              <div style={{ fontSize: '13px', color: '#6c757d', marginTop: '2px' }}>No. of visits</div>
             </div>
             <div style={{ padding: '6px 8px' }}>
-              <div style={{ 
-                fontSize: '20px', 
-                fontWeight: '600', 
-                color: '#495057',
-                lineHeight: 1
-              }}>
+              <div style={{ fontSize: '20px', fontWeight: '600', color: '#495057', lineHeight: 1 }}>
                 {metrics.schoolsCovered}
               </div>
-              <div style={{ 
-                fontSize: '13px', 
-                color: '#6c757d',
-                marginTop: '2px'
-              }}>
-                Schools Covered
-              </div>
+              <div style={{ fontSize: '13px', color: '#6c757d', marginTop: '2px' }}>Schools (distinct)</div>
             </div>
             <div style={{ padding: '6px 8px' }}>
-              <div style={{ 
-                fontSize: '20px', 
-                fontWeight: '600', 
-                color: '#495057',
-                lineHeight: 1
-              }}>
+              <div style={{ fontSize: '20px', fontWeight: '600', color: '#495057', lineHeight: 1 }}>
                 {metrics.dateRange ? (
                   <>
                     <span style={{ whiteSpace: 'nowrap' }}>
@@ -1451,15 +1596,79 @@ const Graphs = () => {
                   'No data'
                 )}
               </div>
-              <div style={{ 
-                fontSize: '13px', 
-                color: '#6c757d',
-                marginTop: '2px'
-              }}>
-                Coverage
-              </div>
+              <div style={{ fontSize: '13px', color: '#6c757d', marginTop: '2px' }}>Visit date coverage</div>
             </div>
           </div>
+
+          {metrics.avgDmftParts ? (
+            <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e9ecef' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#495057', marginBottom: '8px' }}>
+                Average DMFT (latest visit per child)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px 12px', fontSize: '14px', color: '#495057' }}>
+                <div><span style={{ color: '#6c757d' }}>D:</span> {metrics.avgDmftParts.avgD}</div>
+                <div><span style={{ color: '#6c757d' }}>M:</span> {metrics.avgDmftParts.avgM}</div>
+                <div><span style={{ color: '#6c757d' }}>F:</span> {metrics.avgDmftParts.avgF}</div>
+                <div><span style={{ color: '#6c757d' }}>Total:</span> {metrics.avgDmftParts.avgTotal}</div>
+              </div>
+            </div>
+          ) : null}
+
+          {metrics.visitsBySchool?.length > 0 ? (
+            <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e9ecef' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#495057', marginBottom: '8px' }}>Visits by school</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                {metrics.visitsBySchool.map((row) => (
+                  <div key={row.school} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#495057' }}>
+                    <span style={{ paddingRight: 8 }}>{row.school}</span>
+                    <span style={{ color: '#6c757d', flexShrink: 0 }}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {metrics.visitsByPeriod?.length > 0 ? (
+            <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e9ecef' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#495057', marginBottom: '8px' }}>
+                Visits by {exportRange === 'monthly' ? 'week (selected month)' : 'month (selected year)'}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {metrics.visitsByPeriod.map((row) => (
+                  <div
+                    key={row.label}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      background: '#fff',
+                      border: '1px solid #e9ecef',
+                      fontSize: '13px',
+                      color: '#495057'
+                    }}
+                  >
+                    <strong>{row.label}</strong>
+                    <span style={{ color: '#6c757d', marginLeft: 6 }}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {metrics.treatmentCoverage?.length > 0 ? (
+            <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e9ecef' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#495057', marginBottom: '8px' }}>
+                Treatment types (all visits, including custom labels)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflowY: 'auto', fontSize: '12px' }}>
+                {metrics.treatmentCoverage.map((row) => (
+                  <div key={row.type} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ color: '#495057', wordBreak: 'break-word' }}>{row.type}</span>
+                    <span style={{ color: '#6c757d', flexShrink: 0 }}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1566,7 +1775,10 @@ const Graphs = () => {
             onClick={async () => {
               setExporting(true);
               try {
-                await downloadTreatmentSummaryExcel(allVisits, exportRange, exportMonth, exportYear);
+                await downloadTreatmentSummaryExcel(allVisits, exportRange, exportMonth, exportYear, {
+                  dashboardDateFilter:
+                    dashFilterEnabled && dashFrom && dashTo ? { from: dashFrom, to: dashTo } : null
+                });
               } catch (e) {
                 console.error(e);
                 alert('Export failed. Please try again.');

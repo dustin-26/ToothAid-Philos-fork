@@ -137,6 +137,10 @@ export function getTreatmentCategoryAndValue(treatmentString) {
   const t = (treatmentString || '').trim();
   if (!t) return null;
 
+  /** Visit entry: per-tooth treatment stored as "Tooth 36: Cleaning" — chart by underlying label */
+  const toothScoped = t.match(/^Tooth\s+[^:]+:\s*(.+)$/i);
+  if (toothScoped) return getTreatmentCategoryAndValue(toothScoped[1].trim());
+
   if (t.startsWith('Extraction (')) {
     let perm = 0;
     let temp = 0;
@@ -165,5 +169,6 @@ export function getTreatmentCategoryAndValue(treatmentString) {
   // Match exact label (including Extraction, Fillings, etc. when stored without parenthetical detail)
   const exact = TREATMENT_OPTIONS.find(o => o.label === t);
   if (exact) return { category: exact.label, value: 1 };
-  return { category: 'Others', value: 1 };
+  /** Custom or future treatment strings: keep their own category so reports stay accurate. */
+  return { category: t.length > 120 ? `${t.slice(0, 117)}…` : t, value: 1 };
 }

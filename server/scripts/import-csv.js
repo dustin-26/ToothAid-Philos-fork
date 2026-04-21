@@ -111,7 +111,7 @@ async function run() {
       const sexStr = get(row, childHeaders, 'sex') || 'M';
       const school = get(row, childHeaders, 'school');
       const grade = normalizeGrade(get(row, childHeaders, 'grade'));
-      const barangay = get(row, childHeaders, 'barangay');
+      const barangay = get(row, childHeaders, 'barangay') || '';
       const guardianPhone = get(row, childHeaders, 'guardianPhone');
       const sex = sexStr.toUpperCase() === 'F' ? 'F' : sexStr.toUpperCase() === 'Other' ? 'Other' : 'M';
       return {
@@ -131,7 +131,7 @@ async function run() {
         updatedAt: new Date()
       };
     })
-    .filter((c) => c.childId && c.fullName && c.school && c.barangay);
+    .filter((c) => c.childId && c.fullName && c.school);
 
   const visits = visitRows
     .filter((row) => row.length >= 9)

@@ -11,6 +11,7 @@ import Graphs from './pages/Graphs';
 import Schedule from './pages/Schedule';
 import ScheduleDay from './pages/ScheduleDay';
 import AppointmentPage from './pages/AppointmentPage';
+import ParentFormPage from './pages/ParentFormPage';
 import { performSync, getOutboxOps } from './db/indexedDB';
 import './App.css';
 
@@ -142,6 +143,7 @@ function App() {
         )}
 
         <Routes>
+          <Route path="/parent-form/:token" element={<ParentFormPage />} />
           <Route
             path="/login"
             element={<Login setToken={setToken} />}
