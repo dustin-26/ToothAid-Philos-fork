@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import PageHeader from '../components/PageHeader';
 import { PatientNameBlock } from '../components/PatientNameBlock';
+import { formatProcedureTypeDisplay } from '../constants/appointmentProcedures';
 import { 
   getClinicDay, 
   getAppointmentsByClinicDay,
@@ -331,7 +332,7 @@ const ClinicDayRoster = ({ token }) => {
                   <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px', marginTop: '8px' }}>
                     {appointment.timeWindow === 'AM' ? 'AM slot' : 
                      appointment.timeWindow === 'PM' ? 'PM slot' : 
-                     'Full day'} • {appointment.reason.replace('_', ' ')}
+                     'Full day'} • {formatProcedureTypeDisplay(appointment.procedureType)}
                   </p>
                   {child && (
                     <p style={{ color: '#666', fontSize: '13px', margin: 0 }}>

@@ -17,6 +17,23 @@ function normalizeTreatmentTypes(value) {
   return [];
 }
 
+const FOLLOW_UP_TIMING_VALUES = ['WITHIN_7_DAYS', 'WITHIN_14_DAYS', 'WHENEVER'];
+
+function normalizeFollowUpTiming(raw) {
+  const s = String(raw ?? '').trim();
+  if (FOLLOW_UP_TIMING_VALUES.includes(s)) return s;
+  if (s === 'P0' || s === 'P1') return 'WITHIN_7_DAYS';
+  if (s === 'P2') return 'WITHIN_14_DAYS';
+  if (s === 'P3') return 'WHENEVER';
+  return 'WITHIN_14_DAYS';
+}
+
+function parseFollowUpDueAt(value) {
+  if (value == null || value === '') return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 // Push operations from client
 router.post('/push', authenticateToken, async (req, res) => {
   try {
@@ -155,9 +172,11 @@ router.post('/push', authenticateToken, async (req, res) => {
             requiresFollowUp: payload.requiresFollowUp === true || payload.requiresFollowUp === 'true',
             followUpPriority:
               payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
-                ? ['P0', 'P1', 'P2', 'P3'].includes(String(payload.followUpPriority || '').trim())
-                  ? String(payload.followUpPriority).trim()
-                  : 'P2'
+                ? normalizeFollowUpTiming(payload.followUpPriority)
+                : null,
+            followUpDueAt:
+              payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
+                ? parseFollowUpDueAt(payload.followUpDueAt)
                 : null,
             createdBy: payload.createdBy || username,
             createdAt: payload.createdAt || new Date()
@@ -318,12 +337,18 @@ router.post('/push', authenticateToken, async (req, res) => {
             followUpPriority:
               payload.requiresFollowUp !== undefined
                 ? payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
-                  ? ['P0', 'P1', 'P2', 'P3'].includes(String(payload.followUpPriority || '').trim())
-                    ? String(payload.followUpPriority).trim()
-                    : 'P2'
+                  ? normalizeFollowUpTiming(payload.followUpPriority)
                   : null
                 : existingVisit?.followUpPriority != null
-                  ? String(existingVisit.followUpPriority).trim()
+                  ? normalizeFollowUpTiming(existingVisit.followUpPriority)
+                  : null,
+            followUpDueAt:
+              payload.requiresFollowUp !== undefined
+                ? payload.requiresFollowUp === true || payload.requiresFollowUp === 'true'
+                  ? parseFollowUpDueAt(payload.followUpDueAt)
+                  : null
+                : existingVisit?.followUpDueAt != null
+                  ? parseFollowUpDueAt(existingVisit.followUpDueAt)
                   : null,
             updatedBy: payload.updatedBy || username,
             updatedAt: new Date()

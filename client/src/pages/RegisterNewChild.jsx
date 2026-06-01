@@ -4,7 +4,6 @@ import {
   CHILD_SCHOOL_UI_OTHER,
   CHILD_SCHOOL_GROUPS
 } from '../constants/childSchools';
-import PriorityColorButtons from '../components/PriorityColorButtons';
 import EditableChipList from '../components/EditableChipList';
 import { Link, useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
@@ -550,12 +549,6 @@ const RegisterNewChild = ({ token }) => {
               placeholder="Optional"
             />
           </div>
-
-          <PriorityColorButtons
-            value={formData.priority}
-            onChange={(p) => setFormData((prev) => ({ ...prev, priority: p }))}
-            disabled={saving}
-          />
 
           <div className="form-group">
             <label>Notes (optional)</label>

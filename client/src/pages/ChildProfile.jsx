@@ -8,13 +8,15 @@ import DateInput from '../components/DateInput';
 import { 
   getChild,
   getAllChildren,
-  getVisitsByChild, 
+  getVisitsByChild,
+  getAppointmentsByChild,
   upsertChild, 
   deleteChild, 
   deleteVisit, 
   addToOutbox, 
   performSync 
 } from '../db/indexedDB';
+import { countMissedAppointments } from '../utils/appointmentStatus';
 import { getAgeFromDOB } from '../utils/age';
 import { formatChildDisplayName } from '../utils/displayName';
 import { notifyError, notifySuccess } from '../utils/notify';
@@ -25,9 +27,8 @@ import {
 } from '../constants/childSchools';
 import { API_BASE_URL } from '../config';
 import { PARENT_FORM_FIELD_DEFS } from '../constants/parentFormFields';
-import PriorityColorButtons from '../components/PriorityColorButtons';
 import EditableChipList from '../components/EditableChipList';
-import { getPriorityPillStyle } from '../utils/priorityUi';
+import { getFollowUpTimingLabel, visitRequiresFollowUp } from '../utils/followUpTiming';
 
 const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
 const MEDICAL_OTHER_NOTE_PRESETS = ['Asthma', 'ADHD', 'Takes regular medication'];
@@ -324,6 +325,8 @@ const ChildProfile = ({ token }) => {
   const location = useLocation();
   const [child, setChild] = useState(null);
   const [visits, setVisits] = useState([]);
+  const [missedAppointmentCount, setMissedAppointmentCount] = useState(0);
+  const [activeFollowUpLabel, setActiveFollowUpLabel] = useState(null);
   const [loading, setLoading] = useState(true);
   
   // Edit child state
@@ -383,12 +386,14 @@ const ChildProfile = ({ token }) => {
 
   const loadData = async () => {
     const childData = await getChild(childId);
-    const visitsData = await getVisitsByChild(childId);
-    
+    const [visitsData, appointments] = await Promise.all([
+      getVisitsByChild(childId),
+      getAppointmentsByChild(childId)
+    ]);
+
     setChild(childData);
-    // Sort by submit time (createdAt) descending; fall back to date for legacy rows.
-    setVisits(
-      visitsData.sort((a, b) => {
+    setMissedAppointmentCount(countMissedAppointments(appointments));
+    const sortedVisits = visitsData.sort((a, b) => {
         const atA = a?.createdAt ? new Date(a.createdAt).getTime() : NaN;
         const atB = b?.createdAt ? new Date(b.createdAt).getTime() : NaN;
         if (Number.isFinite(atA) && Number.isFinite(atB) && atA !== atB) return atB - atA;
@@ -398,7 +403,11 @@ const ChildProfile = ({ token }) => {
         const dB = b?.date ? new Date(b.date).getTime() : NaN;
         if (Number.isFinite(dA) && Number.isFinite(dB) && dA !== dB) return dB - dA;
         return String(b?.visitId || '').localeCompare(String(a?.visitId || ''));
-      })
+      });
+    setVisits(sortedVisits);
+    const latestFollowUpVisit = sortedVisits.find((v) => visitRequiresFollowUp(v));
+    setActiveFollowUpLabel(
+      latestFollowUpVisit ? getFollowUpTimingLabel(latestFollowUpVisit.followUpPriority) : null
     );
     setLoading(false);
   };
@@ -541,32 +550,6 @@ const ChildProfile = ({ token }) => {
       ...prev,
       medicalCondition: { ...(prev.medicalCondition || emptyMedicalForm()), [field]: value }
     }));
-  };
-
-  const applyQuickPriority = async (p) => {
-    if (!child) return;
-    setSavingChild(true);
-    setError('');
-    try {
-      const username = localStorage.getItem('username') || 'unknown';
-      const now = new Date().toISOString();
-      const updatedChild = { ...child, priority: p, updatedBy: username, updatedAt: now };
-      await upsertChild(updatedChild);
-      await addToOutbox('UPSERT_CHILD', childId, updatedChild);
-      if (navigator.onLine && token) {
-        try {
-          await performSync(token);
-        } catch (syncError) {
-          console.error('Sync failed:', syncError);
-        }
-      }
-      setChild(updatedChild);
-      notifySuccess('Priority updated.');
-    } catch (err) {
-      notifyError(err?.message || 'Could not update priority');
-    } finally {
-      setSavingChild(false);
-    }
   };
 
   const createParentFormLink = async () => {
@@ -1175,13 +1158,6 @@ const ChildProfile = ({ token }) => {
               />
             </div>
 
-            <PriorityColorButtons
-              label="Priority"
-              value={childFormData.priority}
-              onChange={(p) => setChildFormData((prev) => ({ ...prev, priority: p }))}
-              disabled={savingChild}
-            />
-
             <div className="form-group">
               <label>Notes (optional)</label>
               <textarea
@@ -1217,22 +1193,18 @@ const ChildProfile = ({ token }) => {
           </form>
         ) : (
           <>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', marginBottom: '10px' }}>
+            <div style={{ marginBottom: '10px' }}>
               <PatientNameBlock child={child} nameTag="h3" />
-              <div
-                className="badge-pill"
-                style={{
-                  background: getPriorityPillStyle(child.priority).bg,
-                  color: getPriorityPillStyle(child.priority).color,
-                  fontSize: '12px',
-                  alignSelf: 'flex-start'
-                }}
-              >
-                {getPriorityPillStyle(child.priority).label}
-              </div>
             </div>
-            <p style={{ fontSize: '14px', color: 'var(--color-muted)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: '14px', color: 'var(--color-muted)', margin: '0 0 4px' }}>
               {child.school} • {child.grade || '—'} • {child.class || '—'}
+            </p>
+            <p style={{ fontSize: '14px', color: 'var(--color-muted)', margin: '0 0 4px' }}>
+              <strong style={{ color: '#374151' }}>Missed appointments:</strong> {missedAppointmentCount}
+            </p>
+            <p style={{ fontSize: '14px', color: 'var(--color-muted)', margin: '0 0 12px' }}>
+              <strong style={{ color: '#374151' }}>Follow-up timing:</strong>{' '}
+              {activeFollowUpLabel || '—'}
             </p>
             <button
               type="button"
@@ -1588,15 +1560,6 @@ const ChildProfile = ({ token }) => {
             )}
           </div>
 
-          <div>
-            <h3 style={{ margin: '0 0 8px', fontSize: '15px', color: '#374151' }}>Quick priority</h3>
-            <PriorityColorButtons
-              label=""
-              value={child.priority}
-              onChange={(p) => void applyQuickPriority(p)}
-              disabled={savingChild}
-            />
-          </div>
         </div>
       ) : null}
 

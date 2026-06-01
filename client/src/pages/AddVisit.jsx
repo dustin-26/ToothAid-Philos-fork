@@ -8,6 +8,12 @@ import { addToOutbox, addVisit, getChild, getVisit, performSync, updateVisit, up
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd, ymdToIsoUtc8 } from '../utils/dates';
 import {
+  computeFollowUpDueAt,
+  FOLLOW_UP_TIMING_OPTIONS,
+  FOLLOW_UP_WITHIN_14_DAYS,
+  normalizeFollowUpTiming
+} from '../utils/followUpTiming';
+import {
   CONDITIONS,
   permanentTeeth,
   primaryTeeth,
@@ -247,7 +253,7 @@ export default function AddVisit({ token }) {
   const [chiefComplaint, setChiefComplaint] = useState('');
   const [visitNotes, setVisitNotes] = useState('');
   const [requiresFollowUp, setRequiresFollowUp] = useState(false);
-  const [followUpPriority, setFollowUpPriority] = useState('P2');
+  const [followUpPriority, setFollowUpPriority] = useState('WITHIN_14_DAYS');
 
   const [dentition, setDentition] = useState('PERMANENT');
   const [toothRecords, setToothRecords] = useState({});
@@ -322,11 +328,7 @@ export default function AddVisit({ token }) {
       setMedications(normalizeMedicationsForForm(v.medications));
       setMedDraft({ name: '', dosage: '', frequencyPerDay: '', days: '' });
       setRequiresFollowUp(v.requiresFollowUp === true || v.requiresFollowUp === 'true');
-      setFollowUpPriority(
-        v.followUpPriority != null && String(v.followUpPriority).trim() !== ''
-          ? String(v.followUpPriority).trim()
-          : 'P2'
-      );
+      setFollowUpPriority(normalizeFollowUpTiming(v.followUpPriority));
       setInitializing(false);
     })();
     return () => {
@@ -672,7 +674,10 @@ export default function AddVisit({ token }) {
           medications: medicationsForSave,
           notes: notesForSave,
           requiresFollowUp: Boolean(requiresFollowUp),
-          followUpPriority: requiresFollowUp ? followUpPriority : null,
+          followUpPriority: requiresFollowUp ? normalizeFollowUpTiming(followUpPriority) : null,
+          followUpDueAt: requiresFollowUp
+            ? computeFollowUpDueAt(dateIso, followUpPriority)
+            : null,
           createdBy: existing.createdBy || username,
           createdAt: existing.createdAt || now,
           updatedBy: username,
@@ -703,7 +708,10 @@ export default function AddVisit({ token }) {
           medications: medicationsForSave,
           notes: notesForSave,
           requiresFollowUp: Boolean(requiresFollowUp),
-          followUpPriority: requiresFollowUp ? followUpPriority : null,
+          followUpPriority: requiresFollowUp ? normalizeFollowUpTiming(followUpPriority) : null,
+          followUpDueAt: requiresFollowUp
+            ? computeFollowUpDueAt(dateIso, followUpPriority)
+            : null,
           createdBy: username,
           createdAt: now
         };
@@ -1149,8 +1157,8 @@ export default function AddVisit({ token }) {
       <div className="card" style={{ marginBottom: '12px' }}>
         <h3 style={{ marginTop: 0, marginBottom: '10px' }}>Follow-up appointment</h3>
         <p style={{ fontSize: '13px', color: 'var(--color-muted)', margin: '0 0 12px', lineHeight: 1.45 }}>
-          Flag when this patient still needs a return visit booked. P0 / P1 items appear on the Home dashboard under
-          Emergency; P2 / P3 under Schedule follow-ups until you add an appointment.
+          Flag when this patient still needs a return visit booked. Choose how soon they should be scheduled — this
+          controls order on Home → Schedule follow-ups.
         </p>
         <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '12px' }}>
           <input
@@ -1159,34 +1167,28 @@ export default function AddVisit({ token }) {
             onChange={(e) => {
               const on = e.target.checked;
               setRequiresFollowUp(on);
-              if (!on) setFollowUpPriority('P2');
+              if (!on) setFollowUpPriority(FOLLOW_UP_WITHIN_14_DAYS);
             }}
           />
           <span style={{ fontWeight: 650 }}>Requires follow-up appointment</span>
         </label>
         {requiresFollowUp && (
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Follow-up priority</label>
+            <label>Follow-up timing</label>
             <select
-              value={followUpPriority}
+              value={normalizeFollowUpTiming(followUpPriority)}
               onChange={(e) => setFollowUpPriority(e.target.value)}
               className="form-control"
             >
-              <option value="P0">P0 — Emergency</option>
-              <option value="P1">P1 — Urgent</option>
-              <option value="P2">P2 — Routine</option>
-              <option value="P3">P3 — When convenient</option>
+              {FOLLOW_UP_TIMING_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
-            {(followUpPriority === 'P0' || followUpPriority === 'P1') && (
-              <p style={{ fontSize: '12px', color: '#b45309', margin: '8px 0 0', fontWeight: 600 }}>
-                This will show on Home → Reminders & follow-ups → Emergency after you save.
-              </p>
-            )}
-            {(followUpPriority === 'P2' || followUpPriority === 'P3') && (
-              <p style={{ fontSize: '12px', color: 'var(--color-muted)', margin: '8px 0 0' }}>
-                After save, use Schedule follow-up on Home to book the next slot.
-              </p>
-            )}
+            <p style={{ fontSize: '12px', color: 'var(--color-muted)', margin: '8px 0 0' }}>
+              After save, use Schedule follow-up on Home to book the next slot.
+            </p>
           </div>
         )}
       </div>
