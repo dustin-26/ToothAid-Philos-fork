@@ -29,3 +29,11 @@ export const isAppointmentHiddenAsSuperseded = (appt, supersededIds) => {
     String(appt.rescheduledToAppointmentId).trim() !== ''
   );
 };
+
+/** Lifetime MISSED appointments for one child, excluding superseded rows. */
+export const countMissedAppointments = (appointments) => {
+  const supersededIds = getSupersededAppointmentIds(appointments);
+  return (appointments || []).filter(
+    (a) => a?.status === 'MISSED' && !isAppointmentHiddenAsSuperseded(a, supersededIds)
+  ).length;
+};

@@ -13,10 +13,11 @@ import {
   upsertClinicDay
 } from '../db/indexedDB';
 import { PatientNameBlock } from '../components/PatientNameBlock';
+import AppointmentProcedureField from '../components/AppointmentProcedureField';
+import { resolveProcedureTypeForSave } from '../constants/appointmentProcedures';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { isActiveBookedSlot } from '../utils/appointmentStatus';
 import { toYmd } from '../utils/dates';
-import PriorityColorButtons from '../components/PriorityColorButtons';
 
 const ymd = (d) => {
   if (typeof d === 'string') {
@@ -64,7 +65,8 @@ export default function AppointmentPage({ token }) {
   const [viewMonth, setViewMonth] = useState(today.getMonth()); // 0-11
   const [selectedDate, setSelectedDate] = useState(toYmd(today));
   const [timeWindow, setTimeWindow] = useState('AM');
-  const [priority, setPriority] = useState('P2');
+  const [procedureSelect, setProcedureSelect] = useState('');
+  const [procedureCustom, setProcedureCustom] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -142,7 +144,7 @@ export default function AppointmentPage({ token }) {
         reason: 'FOLLOW_UP',
         status: 'SCHEDULED',
         rescheduledFromAppointmentId: rescheduleFromAppointmentId,
-        priority,
+        procedureType: resolveProcedureTypeForSave(procedureSelect, procedureCustom),
         note: note.trim() || null,
         createdBy: username,
         createdAt: now
@@ -395,7 +397,13 @@ export default function AppointmentPage({ token }) {
               <option value="PM">PM</option>
             </select>
           </div>
-          <PriorityColorButtons value={priority} onChange={setPriority} disabled={saving} />
+          <AppointmentProcedureField
+            selectValue={procedureSelect}
+            customValue={procedureCustom}
+            onSelectChange={setProcedureSelect}
+            onCustomChange={setProcedureCustom}
+            disabled={saving}
+          />
         </div>
 
         <div className="form-group" style={{ marginTop: '10px' }}>

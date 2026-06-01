@@ -111,6 +111,12 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  /** Scheduled procedure e.g. Cleaning, Filling, or custom text */
+  procedureType: {
+    type: String,
+    default: null,
+    trim: true
+  },
   priorityTier: {
     type: Number,
     default: null

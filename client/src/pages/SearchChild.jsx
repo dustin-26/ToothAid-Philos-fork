@@ -10,7 +10,16 @@ import {
   CHILD_SCHOOL_FILTER_OTHERS,
   isPresetChildSchool
 } from '../constants/childSchools';
-import { getPriorityPillStyle } from '../utils/priorityUi';
+import {
+  buildLatestFollowUpByChild,
+  FOLLOW_UP_TIMING_OPTIONS,
+  FOLLOW_UP_WITHIN_7_DAYS,
+  FOLLOW_UP_WITHIN_14_DAYS,
+  FOLLOW_UP_WHENEVER,
+  getFollowUpTimingLabel
+} from '../utils/followUpTiming';
+
+const FILTER_FOLLOW_UP_NONE = 'NONE';
 
 const SearchChild = ({ token }) => {
   const navigate = useNavigate();
@@ -20,8 +29,11 @@ const SearchChild = ({ token }) => {
   const [filterSchool, setFilterSchool] = useState('');
   const [filterGrade, setFilterGrade] = useState('');
   const [filterClass, setFilterClass] = useState('');
-  const [sortMode, setSortMode] = useState('PRIORITY'); // PRIORITY | RECENT_VISIT
+  const [filterFollowUp, setFilterFollowUp] = useState('');
+  const [sortMode, setSortMode] = useState('RECENT_VISIT'); // NAME | RECENT_VISIT | FOLLOW_UP
   const [recentVisitByChild, setRecentVisitByChild] = useState({}); // { [childId]: isoDate }
+  /** Latest visit follow-up timing per child (requiresFollowUp visits only). */
+  const [followUpByChild, setFollowUpByChild] = useState(new Map());
 
   // Load all children on mount
   useEffect(() => {
@@ -44,6 +56,7 @@ const SearchChild = ({ token }) => {
         if (t > prev) map[v.childId] = new Date(t).toISOString();
       }
       setRecentVisitByChild(map);
+      setFollowUpByChild(buildLatestFollowUpByChild(visits));
     } catch {
       // ignore
     }
@@ -72,15 +85,6 @@ const SearchChild = ({ token }) => {
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [results]);
 
-  const priorityRank = (p) => {
-    const v = String(p || '').toUpperCase().trim();
-    if (v === 'P0') return 0;
-    if (v === 'P1') return 1;
-    if (v === 'P2') return 2;
-    if (v === 'P3') return 3;
-    return 9;
-  };
-
   const filtered = useMemo(() => {
     const q = results.filter((c) => {
       if (filterSchool === CHILD_SCHOOL_FILTER_OTHERS) {
@@ -89,22 +93,38 @@ const SearchChild = ({ token }) => {
       } else if (filterSchool && (c.school || '') !== filterSchool) return false;
       if (filterGrade && (c.grade || '') !== filterGrade) return false;
       if (filterClass && (c.class || '') !== filterClass) return false;
+      if (filterFollowUp) {
+        const fu = followUpByChild.get(c.childId);
+        if (filterFollowUp === FILTER_FOLLOW_UP_NONE) {
+          if (fu) return false;
+        } else if (!fu || fu.timing !== filterFollowUp) {
+          return false;
+        }
+      }
       return true;
     });
+    const followUpRank = (childId) => {
+      const fu = followUpByChild.get(childId);
+      if (!fu?.timing) return 99;
+      if (fu.timing === FOLLOW_UP_WITHIN_7_DAYS) return 0;
+      if (fu.timing === FOLLOW_UP_WITHIN_14_DAYS) return 1;
+      if (fu.timing === FOLLOW_UP_WHENEVER) return 2;
+      return 99;
+    };
     const sorted = [...q].sort((a, b) => {
       if (sortMode === 'RECENT_VISIT') {
         const ta = recentVisitByChild[a.childId] ? new Date(recentVisitByChild[a.childId]).getTime() : -Infinity;
         const tb = recentVisitByChild[b.childId] ? new Date(recentVisitByChild[b.childId]).getTime() : -Infinity;
         if (tb !== ta) return tb - ta;
-      } else {
-        const ra = priorityRank(a.priority);
-        const rb = priorityRank(b.priority);
+      } else if (sortMode === 'FOLLOW_UP') {
+        const ra = followUpRank(a.childId);
+        const rb = followUpRank(b.childId);
         if (ra !== rb) return ra - rb;
       }
       return formatChildDisplayName(a).localeCompare(formatChildDisplayName(b), undefined, { sensitivity: 'base' });
     });
     return sorted;
-  }, [results, filterSchool, filterGrade, filterClass, sortMode, recentVisitByChild]);
+  }, [results, filterSchool, filterGrade, filterClass, filterFollowUp, sortMode, recentVisitByChild, followUpByChild]);
 
   return (
     <div className="container">
@@ -152,8 +172,9 @@ const SearchChild = ({ token }) => {
             value={sortMode}
             onChange={(e) => setSortMode(e.target.value)}
           >
-            <option value="PRIORITY">By priority</option>
             <option value="RECENT_VISIT">By recent visit</option>
+            <option value="FOLLOW_UP">By priority</option>
+            <option value="NAME">By name</option>
           </select>
         </div>
 
@@ -213,13 +234,38 @@ const SearchChild = ({ token }) => {
               ))}
             </select>
           </div>
+          <div>
+            <label className="children-toolbar-label" htmlFor="children-filter-followup">
+              Priority
+            </label>
+            <select
+              id="children-filter-followup"
+              title="Based on follow-up timing from the latest visit"
+              className="children-toolbar-select"
+              value={filterFollowUp}
+              onChange={(e) => setFilterFollowUp(e.target.value)}
+            >
+              <option value="">All</option>
+              {FOLLOW_UP_TIMING_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+              <option value={FILTER_FOLLOW_UP_NONE}>No follow-up priority</option>
+            </select>
+          </div>
         </div>
 
-        {(filterSchool || filterGrade || filterClass) && (
+        {(filterSchool || filterGrade || filterClass || filterFollowUp) && (
           <button
             type="button"
             className="btn btn-secondary"
-            onClick={() => { setFilterSchool(''); setFilterGrade(''); setFilterClass(''); }}
+            onClick={() => {
+              setFilterSchool('');
+              setFilterGrade('');
+              setFilterClass('');
+              setFilterFollowUp('');
+            }}
             style={{ marginTop: '12px', width: '100%' }}
           >
             Clear filters
@@ -232,29 +278,26 @@ const SearchChild = ({ token }) => {
 
       {!loading && filtered.length > 0 && (
         <div style={{ paddingBottom: '78px' }}>
-          {filtered.map((child) => (
+          {filtered.map((child) => {
+            const fu = followUpByChild.get(child.childId);
+            return (
             <Link key={child.childId} to={`/children/${child.childId}`} style={{ textDecoration: 'none', color: 'inherit' }}>
               <div className="card" style={{ cursor: 'pointer', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', marginBottom: '8px' }}>
+                <div style={{ marginBottom: '8px' }}>
                   <PatientNameBlock child={child} nameTag="h3" />
-                  <div
-                    className="badge-pill"
-                    style={{
-                      background: getPriorityPillStyle(child.priority).bg,
-                      color: getPriorityPillStyle(child.priority).color,
-                      fontSize: '12px',
-                      alignSelf: 'flex-start'
-                    }}
-                  >
-                    {getPriorityPillStyle(child.priority).label}
-                  </div>
                 </div>
                 <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px' }}>
                   {child.school} • {child.grade || '—'} • {child.class || '—'}
                 </p>
+                {fu?.timing ? (
+                  <p style={{ color: '#6b7280', fontSize: '13px', margin: 0 }}>
+                    Priority (follow-up): {getFollowUpTimingLabel(fu.timing)}
+                  </p>
+                ) : null}
               </div>
             </Link>
-          ))}
+            );
+          })}
         </div>
       )}
 

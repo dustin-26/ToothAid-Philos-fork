@@ -16,9 +16,18 @@ import {
   setMeta,
   upsertAppointment
 } from '../db/indexedDB';
-import { getSupersededAppointmentIds, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
+import { countMissedAppointments, getSupersededAppointmentIds, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
 import { formatChildDisplayName } from '../utils/displayName';
 import { toYmd } from '../utils/dates';
+import {
+  buildLatestFollowUpByChild,
+  computeFollowUpDueAt,
+  followUpSortRank,
+  getFollowUpTimingLabel,
+  isUrgentFollowUpTiming,
+  normalizeFollowUpTiming,
+  visitRequiresFollowUp
+} from '../utils/followUpTiming';
 
 const sortAppointmentsByCreated = (arr) =>
   [...(arr || [])].sort((a, b) => {
@@ -43,19 +52,7 @@ const uniqueChildOrderFromSched = (schedList) => {
 
 const MAX_SLOT = 3;
 const MAX_REMINDER_ROWS = 10;
-const MAX_EMERGENCY_ROWS = 8;
 const SEND_REMINDER_DAYS = 14;
-
-const isEmergencyAppointmentPriority = (appt) => {
-  const p = String(appt?.priority ?? 'P2').trim();
-  return p === 'P0' || p === 'P1';
-};
-
-const PRIORITY_RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
-const prioritySortValue = (p) => {
-  if (p == null) return 99;
-  return PRIORITY_RANK[String(p).trim()] ?? 99;
-};
 
 const scheduleStatusRank = (status) => {
   if (status === 'MISSED') return 0;
@@ -63,20 +60,12 @@ const scheduleStatusRank = (status) => {
   return 2;
 };
 
-const visitRequiresFollowUpFlag = (v) =>
-  v?.childId &&
-  v?.visitId &&
-  (v.requiresFollowUp === true || v.requiresFollowUp === 'true');
-
-const normalizeVisitFollowUpPriority = (v) => {
-  const p = String(v?.followUpPriority ?? 'P2').trim();
-  return ['P0', 'P1', 'P2', 'P3'].includes(p) ? p : 'P2';
-};
+const followUpTimingSortValue = (appt) => followUpSortRank(appt?.followUpTiming);
 
 /** One row per child across missed/cancelled appointments and visit-flagged follow-ups. */
 const compareUnifiedScheduleCandidates = (a, b) => {
-  const pa = prioritySortValue(a.appt.priority);
-  const pb = prioritySortValue(b.appt.priority);
+  const pa = followUpTimingSortValue(a.appt);
+  const pb = followUpTimingSortValue(b.appt);
   if (pa !== pb) return pa - pb;
   return compareScheduleRows(a, b);
 };
@@ -98,8 +87,6 @@ const compareScheduleRows = (a, b) => {
   const dueA = a.appt.followUpDueAt ? new Date(a.appt.followUpDueAt).getTime() : Infinity;
   const dueB = b.appt.followUpDueAt ? new Date(b.appt.followUpDueAt).getTime() : Infinity;
   if (dueA !== dueB) return dueA - dueB;
-  const p = prioritySortValue(a.appt.priority) - prioritySortValue(b.appt.priority);
-  if (p !== 0) return p;
   return new Date(a.appt.createdAt || 0) - new Date(b.appt.createdAt || 0);
 };
 
@@ -108,17 +95,7 @@ const compareSendReminderRows = (a, b) => {
   const twA = a.appt.timeWindow === 'PM' ? 1 : 0;
   const twB = b.appt.timeWindow === 'PM' ? 1 : 0;
   if (twA !== twB) return twA - twB;
-  const p = prioritySortValue(a.appt.priority) - prioritySortValue(b.appt.priority);
-  if (p !== 0) return p;
   return new Date(a.appt.createdAt || 0) - new Date(b.appt.createdAt || 0);
-};
-
-/** P0 before P1, then usual missed/cancelled tie-breakers. */
-const compareEmergencyFollowUpRows = (a, b) => {
-  const pa = prioritySortValue(a.appt.priority);
-  const pb = prioritySortValue(b.appt.priority);
-  if (pa !== pb) return pa - pb;
-  return compareScheduleRows(a, b);
 };
 
 const todayRowIconBtn = {
@@ -188,8 +165,8 @@ const Home = ({ setToken }) => {
   const [todayContactModal, setTodayContactModal] = useState(null);
   const [reminderSendRows, setReminderSendRows] = useState([]);
   const [followUpScheduleRows, setFollowUpScheduleRows] = useState([]);
-  const [emergencyRescheduleRows, setEmergencyRescheduleRows] = useState([]);
   const [remindersPanelOpen, setRemindersPanelOpen] = useState(false);
+  const [visitRemindersOpen, setVisitRemindersOpen] = useState(false);
 
   const todayKey = useMemo(() => {
     return toYmd(new Date());
@@ -275,7 +252,6 @@ const Home = ({ setToken }) => {
       const allDays = await getAllClinicDays();
       if (!allDays?.length) {
         setFollowUpScheduleRows([]);
-        setEmergencyRescheduleRows([]);
         setReminderSendRows([]);
         return;
       }
@@ -292,6 +268,9 @@ const Home = ({ setToken }) => {
         return { appt, dateKey, location };
       };
 
+      const manualVisits = await getManualVisits();
+      const followUpByChild = buildLatestFollowUpByChild(manualVisits);
+
       const scheduleRaw = flat
         .filter(
           (a) =>
@@ -299,23 +278,46 @@ const Home = ({ setToken }) => {
             (a.status === 'MISSED' || a.status === 'CANCELLED') &&
             !isAppointmentHiddenAsSuperseded(a, supersededIds)
         )
-        .map(enrich);
+        .map(enrich)
+        .filter((row) => followUpByChild.has(row.appt.childId));
 
-      const manualVisits = await getManualVisits();
+      const apptsByChild = new Map();
+      for (const a of flat) {
+        if (!a?.childId) continue;
+        if (!apptsByChild.has(a.childId)) apptsByChild.set(a.childId, []);
+        apptsByChild.get(a.childId).push(a);
+      }
+
+      const scheduleRawWithTiming = scheduleRaw.map((row) => {
+        const fu = followUpByChild.get(row.appt.childId);
+        const timing = fu?.timing ?? normalizeFollowUpTiming(null);
+        return {
+          ...row,
+          appt: {
+            ...row.appt,
+            followUpTiming: timing,
+            followUpDueAt: fu?.dueAt ?? null
+          }
+        };
+      });
+
       const visitFollowUpRows = await Promise.all(
-        manualVisits.filter(visitRequiresFollowUpFlag).map(async (v) => {
+        manualVisits.filter(visitRequiresFollowUp).map(async (v) => {
           const child = await getChild(v.childId);
           const dateKey = toYmd(v.date);
-          const pri = normalizeVisitFollowUpPriority(v);
+          const timing = normalizeFollowUpTiming(v.followUpPriority);
           const ts = v.updatedAt || v.createdAt || new Date(0).toISOString();
           return {
             appt: {
               appointmentId: `visit-followup-${v.visitId}`,
               childId: v.childId,
               status: 'VISIT_FOLLOWUP',
-              priority: pri,
+              followUpTiming: timing,
               createdAt: ts,
-              followUpDueAt: null,
+              followUpDueAt:
+                v.followUpDueAt != null && String(v.followUpDueAt).trim() !== ''
+                  ? new Date(v.followUpDueAt).toISOString()
+                  : computeFollowUpDueAt(v.date, timing),
               note: v.notes != null ? String(v.notes) : null,
               timeWindow: 'AM'
             },
@@ -327,7 +329,7 @@ const Home = ({ setToken }) => {
         })
       );
 
-      const scheduleCandidates = [...scheduleRaw, ...visitFollowUpRows];
+      const scheduleCandidates = [...scheduleRawWithTiming, ...visitFollowUpRows];
 
       const sendRaw = flat
         .filter((a) => {
@@ -350,11 +352,7 @@ const Home = ({ setToken }) => {
       };
 
       const pickedPerChild = pickPerChild(scheduleCandidates, compareUnifiedScheduleCandidates);
-      const routineScheduleRaw = pickedPerChild.filter((row) => !isEmergencyAppointmentPriority(row.appt));
-      const emergencyRaw = pickedPerChild.filter((row) => isEmergencyAppointmentPriority(row.appt));
-
-      const routinePicked = [...routineScheduleRaw].sort(compareScheduleRows).slice(0, MAX_REMINDER_ROWS);
-      const emergencyPicked = [...emergencyRaw].sort(compareEmergencyFollowUpRows).slice(0, MAX_EMERGENCY_ROWS);
+      const followUpPicked = [...pickedPerChild].sort(compareScheduleRows).slice(0, MAX_REMINDER_ROWS);
       const sendPicked = pickPerChild(sendRaw, compareSendReminderRows).slice(0, MAX_REMINDER_ROWS);
 
       const hydrate = async (rows) =>
@@ -362,6 +360,9 @@ const Home = ({ setToken }) => {
           rows.map(async (row) => {
             const child = await getChild(row.appt.childId);
             const isVisit = Boolean(row.visitSource);
+            const timing = normalizeFollowUpTiming(row.appt.followUpTiming);
+            const childAppts = apptsByChild.get(row.appt.childId) || [];
+            const missedCount = countMissedAppointments(childAppts);
             return {
               key: isVisit ? `vf:${row.visitId}` : row.appt.appointmentId,
               fromAppointmentId: isVisit ? null : row.appt.appointmentId,
@@ -373,7 +374,9 @@ const Home = ({ setToken }) => {
               patientId: child?.patientId != null ? String(child.patientId).trim() : '',
               status: row.appt.status,
               statusDisplay: isVisit ? 'Visit follow-up' : row.appt.status,
-              priority: row.appt.priority || 'P2',
+              followUpTiming: timing,
+              followUpLabel: getFollowUpTimingLabel(timing),
+              missedCount,
               dateKey: row.dateKey,
               location: row.location,
               timeWindow: row.appt.timeWindow === 'PM' ? 'PM' : 'AM',
@@ -382,13 +385,8 @@ const Home = ({ setToken }) => {
           })
         );
 
-      const [routineH, emergencyH, sendH] = await Promise.all([
-        hydrate(routinePicked),
-        hydrate(emergencyPicked),
-        hydrate(sendPicked)
-      ]);
-      setFollowUpScheduleRows(routineH);
-      setEmergencyRescheduleRows(emergencyH);
+      const [followUpH, sendH] = await Promise.all([hydrate(followUpPicked), hydrate(sendPicked)]);
+      setFollowUpScheduleRows(followUpH);
       setReminderSendRows(sendH);
     };
 
@@ -396,7 +394,6 @@ const Home = ({ setToken }) => {
       loadReminderDashboard().catch((e) => {
         console.error('Reminder dashboard load failed:', e);
         setFollowUpScheduleRows([]);
-        setEmergencyRescheduleRows([]);
         setReminderSendRows([]);
       });
     };
@@ -645,8 +642,7 @@ const Home = ({ setToken }) => {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: '16px', fontWeight: 800 }}>Reminders & follow-ups</div>
             <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '2px' }}>
-              Reminders: {reminderSendRows.length} · Emergency: {emergencyRescheduleRows.length} · Follow-ups:{' '}
-              {followUpScheduleRows.length}
+              Follow-ups: {followUpScheduleRows.length} · Visit reminders: {reminderSendRows.length}
             </div>
           </div>
           <span style={{ fontSize: '14px', color: 'var(--color-muted)', flexShrink: 0 }} aria-hidden>
@@ -657,225 +653,189 @@ const Home = ({ setToken }) => {
         {remindersPanelOpen && (
           <>
             <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e5e5ea' }}>
-              <div style={{ fontSize: '15px', fontWeight: 800, marginBottom: '4px' }}>Visit reminders</div>
+              <div style={{ fontSize: '15px', fontWeight: 800, marginBottom: '4px' }}>Schedule follow-ups</div>
               <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginBottom: '10px' }}>
-                Scheduled visits in the next {SEND_REMINDER_DAYS} days — send SMS or copy a reminder.
+                Based on visit follow-up timing (7 / 14 days or whenever). Missed slots show a missed count only — not
+                emergency priority. Book a new slot; rescheduling links a previous appointment when applicable.
               </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-block"
-                style={{ marginBottom: '10px' }}
-                onClick={() => navigate('/schedule', { state: { openMonthForDate: todayKey } })}
-              >
-                Pick week on calendar
-              </button>
-              {reminderSendRows.length === 0 ? (
-                <div style={{ color: 'var(--color-muted)', fontSize: '14px' }}>No upcoming scheduled visits in this window.</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {reminderSendRows.map((row) => (
-                    <div
-                      key={row.key}
-                      style={{
-                        border: '1px solid #e5e5ea',
-                        borderRadius: '12px',
-                        padding: '10px 12px',
-                        background: '#fafafa'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                        <PatientNameBlock name={row.childName} patientId={row.patientId || undefined} />
-                        <div style={{ fontSize: '12px', color: 'var(--color-muted)', textAlign: 'right' }}>{row.priority}</div>
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '4px' }}>
-                        {row.dateKey} ({row.timeWindow}) · {row.location}
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() =>
-                            setTodayContactModal({
-                              child: row.child,
-                              intent: 'send_reminder',
-                              dateKey: row.dateKey,
-                              location: row.location,
-                              timeWindow: row.timeWindow,
-                              note: row.note
-                            })
-                          }
-                        >
-                          Contact / copy
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={() => row.dateKey && navigate(`/schedule/${row.dateKey}`)}
-                          disabled={!row.dateKey}
-                        >
-                          Open day
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+              {followUpScheduleRows.length === 0 ? (
+                <div style={{ color: 'var(--color-muted)', fontSize: '14px' }}>
+                  No follow-ups needed, or all are already linked to a new booking.
                 </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                marginTop: '16px',
-                paddingTop: '16px',
-                borderTop: '1px solid #e5e5ea',
-                borderLeft: '4px solid #dc2626',
-                paddingLeft: '12px',
-                marginLeft: '-2px',
-                background: 'linear-gradient(90deg, rgba(254,226,226,0.25) 0%, transparent 55%)'
-              }}
-            >
-              <div style={{ fontSize: '15px', fontWeight: 800, marginBottom: '4px', color: '#991b1b' }}>Emergency priority</div>
-              <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginBottom: '10px' }}>
-                Missed or cancelled P0 / P1, or a visit flagged P0 / P1 follow-up — reschedule as soon as possible.
-              </div>
-              {emergencyRescheduleRows.length === 0 ? (
-                <div style={{ color: 'var(--color-muted)', fontSize: '14px' }}>No P0 / P1 cases right now.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {emergencyRescheduleRows.map((row) => (
-                    <div
-                      key={row.key}
-                      style={{
-                        border: '1px solid #fecaca',
-                        borderRadius: '12px',
-                        padding: '10px 12px',
-                        background: '#fff7f7'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                        <PatientNameBlock name={row.childName} patientId={row.patientId || undefined} />
-                        <div style={{ fontSize: '12px', fontWeight: 800, color: '#b91c1c', textAlign: 'right' }}>
-                          {row.priority} · {row.statusDisplay}
+                  {followUpScheduleRows.map((row) => {
+                    const urgent = isUrgentFollowUpTiming(row.followUpTiming);
+                    const statusLine = [
+                      row.statusDisplay,
+                      !row.visitSource && row.missedCount > 0
+                        ? `${row.missedCount} missed`
+                        : null
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+                    return (
+                      <div
+                        key={row.key}
+                        style={{
+                          border: urgent ? '1px solid #fecaca' : '1px solid #e5e5ea',
+                          borderRadius: '12px',
+                          padding: '10px 12px',
+                          background: urgent ? '#fff7f7' : '#fafafa'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                          <PatientNameBlock name={row.childName} patientId={row.patientId || undefined} />
+                          <div
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: urgent ? 700 : 400,
+                              color: urgent ? '#b45309' : 'var(--color-muted)',
+                              textAlign: 'right'
+                            }}
+                          >
+                            {statusLine}
+                          </div>
                         </div>
-                      </div>
-                      {row.dateKey ? (
                         <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '4px' }}>
-                          {row.visitSource
-                            ? `Visit on ${row.dateKey} · ${row.location}`
-                            : `Was ${row.dateKey} (${row.timeWindow}) · ${row.location}`}
+                          Follow-up: {row.followUpLabel}
+                          {row.dateKey
+                            ? row.visitSource
+                              ? ` · Visit ${row.dateKey} · ${row.location}`
+                              : ` · Was ${row.dateKey} (${row.timeWindow}) · ${row.location}`
+                            : ''}
                         </div>
-                      ) : null}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() =>
-                            setTodayContactModal({
-                              child: row.child,
-                              intent: 'schedule',
-                              dateKey: row.dateKey,
-                              location: row.location,
-                              timeWindow: row.timeWindow,
-                              note: row.note
-                            })
-                          }
-                        >
-                          Contact
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          style={{ background: '#b91c1c', borderColor: '#b91c1c' }}
-                          onClick={() =>
-                            navigate(`/children/${row.childId}/appointment`, {
-                              state: {
-                                returnTo: '/',
-                                ...(row.fromAppointmentId
-                                  ? { rescheduleFromAppointmentId: row.fromAppointmentId }
-                                  : {})
-                              }
-                            })
-                          }
-                        >
-                          Schedule now
-                        </button>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() =>
+                              setTodayContactModal({
+                                child: row.child,
+                                intent: 'schedule',
+                                dateKey: row.dateKey,
+                                location: row.location,
+                                timeWindow: row.timeWindow,
+                                note: row.note
+                              })
+                            }
+                          >
+                            Contact
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() =>
+                              navigate(`/children/${row.childId}/appointment`, {
+                                state: {
+                                  returnTo: '/',
+                                  ...(row.fromAppointmentId
+                                    ? { rescheduleFromAppointmentId: row.fromAppointmentId }
+                                    : {})
+                                }
+                              })
+                            }
+                          >
+                            Schedule
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
 
             <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #e5e5ea' }}>
-              <div style={{ fontSize: '15px', fontWeight: 800, marginBottom: '4px' }}>Schedule follow-ups</div>
-              <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginBottom: '10px' }}>
-                Missed or cancelled (P2 / P3), or a visit flagged follow-up — book a new slot; rescheduling links a
-                previous appointment when applicable.
-              </div>
-              {followUpScheduleRows.length === 0 ? (
-                <div style={{ color: 'var(--color-muted)', fontSize: '14px' }}>
-                  No routine follow-ups, or all are already linked to a new booking.
+              <button
+                type="button"
+                onClick={() => setVisitRemindersOpen((o) => !o)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  padding: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  font: 'inherit'
+                }}
+                aria-expanded={visitRemindersOpen}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '15px', fontWeight: 800 }}>Visit reminders</div>
+                  <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '2px' }}>
+                    {reminderSendRows.length} in the next {SEND_REMINDER_DAYS} days — SMS or copy a reminder
+                  </div>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {followUpScheduleRows.map((row) => (
-                    <div
-                      key={row.key}
-                      style={{
-                        border: '1px solid #e5e5ea',
-                        borderRadius: '12px',
-                        padding: '10px 12px',
-                        background: '#fafafa'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                        <PatientNameBlock name={row.childName} patientId={row.patientId || undefined} />
-                        <div style={{ fontSize: '12px', color: 'var(--color-muted)', textAlign: 'right' }}>
-                          {row.statusDisplay} · {row.priority}
-                        </div>
-                      </div>
-                      {row.dateKey ? (
-                        <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '4px' }}>
-                          {row.visitSource
-                            ? `Visit on ${row.dateKey} · ${row.location}`
-                            : `Was ${row.dateKey} (${row.timeWindow}) · ${row.location}`}
-                        </div>
-                      ) : null}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() =>
-                            setTodayContactModal({
-                              child: row.child,
-                              intent: 'schedule',
-                              dateKey: row.dateKey,
-                              location: row.location,
-                              timeWindow: row.timeWindow,
-                              note: row.note
-                            })
-                          }
-                        >
-                          Contact
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={() =>
-                            navigate(`/children/${row.childId}/appointment`, {
-                              state: {
-                                returnTo: '/',
-                                ...(row.fromAppointmentId
-                                  ? { rescheduleFromAppointmentId: row.fromAppointmentId }
-                                  : {})
-                              }
-                            })
-                          }
-                        >
-                          Schedule
-                        </button>
-                      </div>
+                <span style={{ fontSize: '14px', color: 'var(--color-muted)', flexShrink: 0 }} aria-hidden>
+                  {visitRemindersOpen ? '▲' : '▼'}
+                </span>
+              </button>
+
+              {visitRemindersOpen && (
+                <div style={{ marginTop: '12px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-block"
+                    style={{ marginBottom: '10px' }}
+                    onClick={() => navigate('/schedule', { state: { openMonthForDate: todayKey } })}
+                  >
+                    Pick week on calendar
+                  </button>
+                  {reminderSendRows.length === 0 ? (
+                    <div style={{ color: 'var(--color-muted)', fontSize: '14px' }}>
+                      No upcoming scheduled visits in this window.
                     </div>
-                  ))}
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {reminderSendRows.map((row) => (
+                        <div
+                          key={row.key}
+                          style={{
+                            border: '1px solid #e5e5ea',
+                            borderRadius: '12px',
+                            padding: '10px 12px',
+                            background: '#fafafa'
+                          }}
+                        >
+                          <PatientNameBlock name={row.childName} patientId={row.patientId || undefined} />
+                          <div style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '4px' }}>
+                            {row.dateKey} ({row.timeWindow}) · {row.location}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() =>
+                                setTodayContactModal({
+                                  child: row.child,
+                                  intent: 'send_reminder',
+                                  dateKey: row.dateKey,
+                                  location: row.location,
+                                  timeWindow: row.timeWindow,
+                                  note: row.note
+                                })
+                              }
+                            >
+                              Contact / copy
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => row.dateKey && navigate(`/schedule/${row.dateKey}`)}
+                              disabled={!row.dateKey}
+                            >
+                              Open day
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

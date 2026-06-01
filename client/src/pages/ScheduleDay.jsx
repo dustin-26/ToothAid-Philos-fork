@@ -4,6 +4,12 @@ import NavBar from '../components/NavBar';
 import PageHeader from '../components/PageHeader';
 import PatientContactModal from '../components/PatientContactModal';
 import { PatientNameBlock } from '../components/PatientNameBlock';
+import AppointmentProcedureField from '../components/AppointmentProcedureField';
+import {
+  formatProcedureTypeDisplay,
+  procedureTypeToFormState,
+  resolveProcedureTypeForSave
+} from '../constants/appointmentProcedures';
 import {
   addToOutbox,
   deleteAppointment,
@@ -19,7 +25,6 @@ import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsS
 import { formatChildDisplayName } from '../utils/displayName';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
-import PriorityColorButtons from '../components/PriorityColorButtons';
 
 const byOrder = (a, b) => {
   const oa = a.order != null ? Number(a.order) : Infinity;
@@ -83,7 +88,8 @@ export default function ScheduleDay({ token }) {
   /** Full child row chosen from search (for display + Add). */
   const [pickedChild, setPickedChild] = useState(null);
   const [pickedWindow, setPickedWindow] = useState('AM');
-  const [pickedPriority, setPickedPriority] = useState('P2');
+  const [pickedProcedureSelect, setPickedProcedureSelect] = useState('');
+  const [pickedProcedureCustom, setPickedProcedureCustom] = useState('');
   const [pickedNote, setPickedNote] = useState('');
   /** In-app confirm when quota is full (some WebViews block window.confirm). */
   const [quotaOverflowModal, setQuotaOverflowModal] = useState(null); // null | { amU, pmU }
@@ -93,7 +99,8 @@ export default function ScheduleDay({ token }) {
   const [editModalAppt, setEditModalAppt] = useState(null);
   const [editForm, setEditForm] = useState({
     timeWindow: 'AM',
-    priority: 'P2',
+    procedureSelect: '',
+    procedureCustom: '',
     note: '',
     status: 'SCHEDULED'
   });
@@ -188,6 +195,8 @@ export default function ScheduleDay({ token }) {
     setSearchResults([]);
     setPickedChildId('');
     setPickedChild(null);
+    setPickedProcedureSelect('');
+    setPickedProcedureCustom('');
     setPickedNote('');
   };
 
@@ -312,7 +321,7 @@ export default function ScheduleDay({ token }) {
         slotNumber: null,
         reason: 'FOLLOW_UP',
         status: 'SCHEDULED',
-        priority: pickedPriority,
+        procedureType: resolveProcedureTypeForSave(pickedProcedureSelect, pickedProcedureCustom),
         note: pickedNote.trim() || null,
         order,
         createdBy: username,
@@ -338,6 +347,8 @@ export default function ScheduleDay({ token }) {
       setSearchResults([]);
       setPickedChildId('');
       setPickedChild(null);
+      setPickedProcedureSelect('');
+      setPickedProcedureCustom('');
       setPickedNote('');
       notifySuccess('Appointment saved.');
     } catch (e) {
@@ -395,9 +406,11 @@ export default function ScheduleDay({ token }) {
     setShowAdd(false);
     setShowDeleteConfirm(false);
     setEditModalAppt(appt);
+    const proc = procedureTypeToFormState(appt.procedureType);
     setEditForm({
       timeWindow: appt.timeWindow === 'PM' ? 'PM' : 'AM',
-      priority: appt.priority || 'P2',
+      procedureSelect: proc.select,
+      procedureCustom: proc.custom,
       note: appt.note != null ? String(appt.note) : '',
       status: appt.status || 'SCHEDULED'
     });
@@ -449,7 +462,7 @@ export default function ScheduleDay({ token }) {
       const updated = {
         ...base,
         timeWindow: tw,
-        priority: editForm.priority,
+        procedureType: resolveProcedureTypeForSave(editForm.procedureSelect, editForm.procedureCustom),
         note: editForm.note.trim() || null,
         status: editForm.status,
         order: orderVal
@@ -667,7 +680,8 @@ export default function ScheduleDay({ token }) {
                 >
                   {getSimpleStatusLabel(appt.status)}
                 </span>
-                {appt.priority || 'P2'} · {appt.note || '—'}
+                {formatProcedureTypeDisplay(appt.procedureType)}
+                {appt.note && String(appt.note).trim() ? ` · ${appt.note}` : ''}
               </div>
             </button>
             <div
@@ -940,9 +954,11 @@ export default function ScheduleDay({ token }) {
                   <option value="PM">PM</option>
                 </select>
               </div>
-              <PriorityColorButtons
-                value={pickedPriority}
-                onChange={setPickedPriority}
+              <AppointmentProcedureField
+                selectValue={pickedProcedureSelect}
+                customValue={pickedProcedureCustom}
+                onSelectChange={setPickedProcedureSelect}
+                onCustomChange={setPickedProcedureCustom}
                 disabled={saving}
               />
             </div>
@@ -1002,9 +1018,11 @@ export default function ScheduleDay({ token }) {
                   <option value="PM">PM</option>
                 </select>
               </div>
-              <PriorityColorButtons
-                value={editForm.priority}
-                onChange={(p) => setEditForm((f) => ({ ...f, priority: p }))}
+              <AppointmentProcedureField
+                selectValue={editForm.procedureSelect}
+                customValue={editForm.procedureCustom}
+                onSelectChange={(v) => setEditForm((f) => ({ ...f, procedureSelect: v }))}
+                onCustomChange={(v) => setEditForm((f) => ({ ...f, procedureCustom: v }))}
                 disabled={saving}
               />
             </div>

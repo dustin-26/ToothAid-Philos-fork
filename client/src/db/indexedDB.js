@@ -64,6 +64,7 @@ function mergeVisitRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('notes', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('requiresFollowUp');
   restoreIfServerMissingOrEmpty('followUpPriority', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('followUpDueAt');
   if (rest.dentition === undefined || rest.dentition === null) {
     if (local?.dentition != null) merged.dentition = local.dentition;
   }
@@ -111,6 +112,7 @@ function mergeAppointmentRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('order');
   restoreIfServerMissingOrEmpty('priority', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('note', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('procedureType', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('createdBy', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('statusChangedAt');
   restoreIfServerMissingOrEmpty('statusChangedBy', { treatBlankStringAsEmpty: true });
