@@ -2,6 +2,11 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { PARENT_FORM_FIELD_GROUPS } from '../constants/parentFormFields';
+import {
+  CHILD_SCHOOL_PRESETS,
+  CHILD_SCHOOL_UI_OTHER,
+  CHILD_SCHOOL_GROUPS
+} from '../constants/childSchools';
 
 const GRADE_OPTIONS = [
   '',
@@ -18,8 +23,7 @@ const GRADE_OPTIONS = [
 
 const GENDER_OPTIONS = [
   { value: 'M', label: 'Male' },
-  { value: 'F', label: 'Female' },
-  { value: 'Other', label: 'Other' }
+  { value: 'F', label: 'Female' }
 ];
 
 const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
@@ -59,6 +63,7 @@ export default function ParentFormPage() {
   const [error, setError] = useState('');
   const [meta, setMeta] = useState(null);
   const [form, setForm] = useState({});
+  const [schoolIsOtherMode, setSchoolIsOtherMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -78,8 +83,11 @@ export default function ParentFormPage() {
           setMeta(null);
           return;
         }
+        const initial = { ...(data.initial || {}) };
+        const initialSchool = String(initial.school || '').trim();
         setMeta(data);
-        setForm({ ...(data.initial || {}) });
+        setForm(initial);
+        setSchoolIsOtherMode(Boolean(initialSchool) && !CHILD_SCHOOL_PRESETS.includes(initialSchool));
       } catch (e) {
         if (!cancelled) setError('Could not load the form. Check your connection.');
       } finally {
@@ -92,8 +100,28 @@ export default function ParentFormPage() {
   }, [token]);
 
   const enabledKeys = useMemo(() => Object.keys(fieldsMap).filter((k) => fieldsMap[k]), [fieldsMap]);
+  const schoolTrimForSelect = String(form.school || '').trim();
+  const schoolSelectDisplayValue = CHILD_SCHOOL_PRESETS.includes(schoolTrimForSelect)
+    ? schoolTrimForSelect
+    : schoolIsOtherMode
+      ? CHILD_SCHOOL_UI_OTHER
+      : '';
 
   const setField = (name, value) => setForm((prev) => ({ ...prev, [name]: value }));
+
+  const handleSchoolSelectChange = (e) => {
+    const v = e.target.value;
+    if (v === CHILD_SCHOOL_UI_OTHER) {
+      setSchoolIsOtherMode(true);
+      setField('school', '');
+    } else if (v) {
+      setSchoolIsOtherMode(false);
+      setField('school', v);
+    } else {
+      setSchoolIsOtherMode(false);
+      setField('school', '');
+    }
+  };
 
   const appendField = (name, value, separator = '\n') => {
     setForm((prev) => {
@@ -175,7 +203,31 @@ export default function ParentFormPage() {
         return (
           <div style={{ marginBottom: 16 }}>
             <label style={{ display: 'block', fontWeight: 600, marginBottom: 6, fontSize: 14 }}>School</label>
-            <input type="text" value={form.school ?? ''} onChange={(e) => setField('school', e.target.value)} style={inputStyle} />
+            <select value={schoolSelectDisplayValue} onChange={handleSchoolSelectChange} required style={inputStyle}>
+              <option value="" disabled>
+                Select school
+              </option>
+              {CHILD_SCHOOL_GROUPS.map((g) => (
+                <optgroup key={g.district} label={g.district}>
+                  {g.schools.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+              <option value={CHILD_SCHOOL_UI_OTHER}>Other (specify)</option>
+            </select>
+            {schoolIsOtherMode ? (
+              <input
+                type="text"
+                value={form.school ?? ''}
+                onChange={(e) => setField('school', e.target.value)}
+                placeholder="School name"
+                required
+                style={{ ...inputStyle, marginTop: 10 }}
+              />
+            ) : null}
           </div>
         );
       case 'grade':
@@ -327,7 +379,7 @@ export default function ParentFormPage() {
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <div style={{ maxWidth: 420, textAlign: 'center' }}>
           <h1 style={{ fontSize: '20px', marginBottom: 12 }}>Thank you</h1>
-          <p style={{ color: '#4b5563', lineHeight: 1.5 }}>Your responses have been saved. This link is now closed.</p>
+          <p style={{ color: '#4b5563', lineHeight: 1.5 }}>Your responses have been saved.</p>
         </div>
       </div>
     );

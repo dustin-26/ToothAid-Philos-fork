@@ -11,8 +11,6 @@ const parentFormTokenSchema = new mongoose.Schema(
     lastName: { type: String, trim: true, default: null },
     /** Keys the parent is allowed to edit (boolean map). */
     fieldsRequested: { type: mongoose.Schema.Types.Mixed, required: true, default: {} },
-    expiresAt: { type: Date, required: true, index: true },
-    usedAt: { type: Date, default: null },
     createdBy: { type: String, trim: true, default: null }
   },
   { timestamps: { createdAt: true, updatedAt: false } }

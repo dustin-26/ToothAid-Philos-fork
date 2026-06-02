@@ -224,19 +224,19 @@ const getSearchCandidates = (child) => {
   const firstLast = [firstName, lastName].filter(Boolean).join(' ');
   const lastFirst = [lastName, firstName].filter(Boolean).join(' ');
   const weightedValues = [
-    [child.fullName, 90],
-    [firstLast, 95],
-    [lastFirst, 100],
-    [firstName, 80],
-    [lastName, 80],
-    [child.school, 55],
-    [child.grade, 45],
-    [child.class, 45],
-    [child.barangay, 45]
+    { value: child.fullName, weight: 90, allowFuzzy: true },
+    { value: firstLast, weight: 95, allowFuzzy: true },
+    { value: lastFirst, weight: 100, allowFuzzy: true },
+    { value: firstName, weight: 80, allowFuzzy: true },
+    { value: lastName, weight: 80, allowFuzzy: true },
+    { value: child.school, weight: 55, allowFuzzy: false },
+    { value: child.grade, weight: 45, allowFuzzy: false },
+    { value: child.class, weight: 45, allowFuzzy: false },
+    { value: child.barangay, weight: 45, allowFuzzy: false }
   ];
   const candidatesByText = new Map();
 
-  weightedValues.forEach(([value, weight]) => {
+  weightedValues.forEach(({ value, weight, allowFuzzy }) => {
     const normalized = normalizeSearchText(value);
     if (!normalized) return;
     const current = candidatesByText.get(normalized);
@@ -244,7 +244,8 @@ const getSearchCandidates = (child) => {
       candidatesByText.set(normalized, {
         normalized,
         tokens: normalized.split(/\s+/).filter(Boolean),
-        weight
+        weight,
+        allowFuzzy
       });
     }
   });
@@ -253,8 +254,8 @@ const getSearchCandidates = (child) => {
 };
 
 const getMaxFuzzyDistance = (token) => {
-  if (token.length < 2) return 0;
-  if (token.length <= 3) return 1;
+  if (token.length < 3) return 0;
+  if (token.length <= 4) return 1;
   if (token.length <= 7) return 2;
   return 3;
 };
@@ -285,12 +286,14 @@ const getEditDistanceWithin = (a, b, maxDistance) => {
   return previous[b.length];
 };
 
-const getTokenMatchScore = (queryToken, candidateToken) => {
+const getTokenMatchScore = (queryToken, candidateToken, allowFuzzy) => {
   if (!queryToken || !candidateToken) return 0;
   if (queryToken === candidateToken) return 100;
   if (candidateToken.startsWith(queryToken)) return queryToken.length === 1 ? 70 : 90;
   if (queryToken.startsWith(candidateToken) && candidateToken.length >= 2) return 76;
   if (candidateToken.includes(queryToken) || queryToken.includes(candidateToken)) return 72;
+
+  if (!allowFuzzy) return 0;
 
   const maxDistance = getMaxFuzzyDistance(queryToken);
   if (!maxDistance || candidateToken.length < 2) return 0;
@@ -300,7 +303,7 @@ const getTokenMatchScore = (queryToken, candidateToken) => {
   return Math.max(45, 70 - distance * 11);
 };
 
-const getCandidateSearchScore = (normalizedQuery, queryTokens, candidate) => {
+const getCandidateSearchScore = (normalizedQuery, queryTokens, candidate, allowFuzzy = false) => {
   if (!candidate.normalized) return 0;
   if (candidate.normalized === normalizedQuery) return 1000 + candidate.weight;
   if (normalizedQuery && candidate.normalized.startsWith(normalizedQuery)) return 930 + candidate.weight;
@@ -308,29 +311,41 @@ const getCandidateSearchScore = (normalizedQuery, queryTokens, candidate) => {
   if (normalizedQuery.length >= 2 && candidate.normalized.length >= 2 && normalizedQuery.includes(candidate.normalized)) return 700 + candidate.weight;
   if (!queryTokens.length) return 0;
 
+  const canUseFuzzy = allowFuzzy && candidate.allowFuzzy;
   let total = 0;
   let exactMatches = 0;
   let prefixMatches = 0;
+  let strongMatches = 0;
+  let fuzzyMatches = 0;
 
   for (const queryToken of queryTokens) {
     let best = 0;
+    let bestExactLike = 0;
     for (const candidateToken of candidate.tokens) {
-      best = Math.max(best, getTokenMatchScore(queryToken, candidateToken));
+      const exactLike = getTokenMatchScore(queryToken, candidateToken, false);
+      const tokenScore = exactLike || getTokenMatchScore(queryToken, candidateToken, canUseFuzzy);
+      best = Math.max(best, tokenScore);
+      bestExactLike = Math.max(bestExactLike, exactLike);
     }
 
-    const threshold = queryToken.length === 1 ? 70 : queryToken.length <= 3 ? 58 : 45;
+    const threshold = canUseFuzzy ? (queryToken.length <= 4 ? 58 : 48) : (queryToken.length === 1 ? 70 : 72);
     if (best < threshold) return 0;
 
     total += best;
     if (best === 100) exactMatches += 1;
     if (best >= 90) prefixMatches += 1;
+    if (bestExactLike >= 72) strongMatches += 1;
+    if (!bestExactLike && best > 0) fuzzyMatches += 1;
   }
 
+  if (fuzzyMatches && queryTokens.length > 1 && strongMatches === 0) return 0;
+
   const average = total / queryTokens.length;
-  return 500 + candidate.weight + average * 3 + exactMatches * 25 + prefixMatches * 12;
+  const fuzzyPenalty = fuzzyMatches * 45;
+  return 500 + candidate.weight + average * 3 + exactMatches * 25 + prefixMatches * 12 - fuzzyPenalty;
 };
 
-const getChildSearchScore = (child, normalizedQuery, queryTokens, digitsOnly) => {
+const getChildSearchScore = (child, normalizedQuery, queryTokens, digitsOnly, allowFuzzy = false) => {
   let bestScore = 0;
   const patientId = String(child.patientId || '');
 
@@ -339,10 +354,24 @@ const getChildSearchScore = (child, normalizedQuery, queryTokens, digitsOnly) =>
   }
 
   getSearchCandidates(child).forEach((candidate) => {
-    bestScore = Math.max(bestScore, getCandidateSearchScore(normalizedQuery, queryTokens, candidate));
+    bestScore = Math.max(bestScore, getCandidateSearchScore(normalizedQuery, queryTokens, candidate, allowFuzzy));
   });
 
   return bestScore;
+};
+
+const shouldRunFuzzySearch = (queryTokens) => {
+  return queryTokens.some(token => /[a-z]/.test(token) && token.length >= 3);
+};
+
+const rankScoredChildren = (scoredChildren) => {
+  return scoredChildren
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return compareChildrenByLastName(a.child, b.child);
+    })
+    .map(({ child }) => child);
 };
 
 // Children operations
@@ -365,14 +394,18 @@ export const searchChildren = async (query) => {
     return sortChildrenByLastName(children);
   }
 
-  return children
-    .map(child => ({ child, score: getChildSearchScore(child, normalizedQuery, queryTokens, digitsOnly) }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return compareChildrenByLastName(a.child, b.child);
-    })
-    .map(({ child }) => child);
+  const exactMatches = children
+    .map(child => ({ child, score: getChildSearchScore(child, normalizedQuery, queryTokens, digitsOnly, false) }))
+    .filter(({ score }) => score > 0);
+
+  if (exactMatches.length >= 8 || !shouldRunFuzzySearch(queryTokens)) {
+    return rankScoredChildren(exactMatches);
+  }
+
+  return rankScoredChildren(children.map(child => ({
+    child,
+    score: getChildSearchScore(child, normalizedQuery, queryTokens, digitsOnly, true)
+  })));
 };
 
 export const upsertChild = async (childData) => {

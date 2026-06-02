@@ -909,11 +909,11 @@ export default function AddVisit({ token }) {
               </button>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', overflowX: 'auto', paddingBottom: 2 }}>
             {toothGrid.map((row, idx) => (
               <div
                 key={idx}
-                style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, 1fr)`, gap: '6px' }}
+                style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, minmax(44px, 1fr))`, gap: '6px' }}
               >
                 {row.map((tooth) => renderExamToothButton(tooth))}
               </div>
@@ -1024,11 +1024,11 @@ export default function AddVisit({ token }) {
               </div>
               <div className="form-group">
                 <label>Tooth map</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', overflowX: 'auto', paddingBottom: 2 }}>
                   {toothGrid.map((row, idx) => (
                     <div
                       key={`${block.id}-row-${idx}`}
-                      style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, 1fr)`, gap: '6px' }}
+                      style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, minmax(44px, 1fr))`, gap: '6px' }}
                     >
                       {row.map((tooth) => renderTreatToothButton(block, tooth))}
                     </div>

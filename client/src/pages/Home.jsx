@@ -17,6 +17,7 @@ import {
   upsertAppointment
 } from '../db/indexedDB';
 import { countMissedAppointments, getSupersededAppointmentIds, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
+import { buildAppointmentScheduleMessage } from '../utils/appointmentMessages';
 import { formatChildDisplayName } from '../utils/displayName';
 import { toYmd } from '../utils/dates';
 import {
@@ -380,6 +381,7 @@ const Home = ({ setToken }) => {
               dateKey: row.dateKey,
               location: row.location,
               timeWindow: row.appt.timeWindow === 'PM' ? 'PM' : 'AM',
+              procedureType: row.appt.procedureType,
               note: row.appt.note
             };
           })
@@ -449,6 +451,17 @@ const Home = ({ setToken }) => {
       .filter((a) => a.childId === childId && a.timeWindow === timeWindow)
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
     return matching.find((a) => a.status === 'SCHEDULED') || matching[0] || null;
+  };
+
+  const getTodayAppointmentContext = async (timeWindow, childId) => {
+    const appt = await findTodayAppointment(timeWindow, childId);
+    if (!appt) return { appointment: { timeWindow }, location: null };
+    const allClinicDays = await getAllClinicDays();
+    const clinicDay = allClinicDays.find((d) => d.clinicDayId === appt.clinicDayId);
+    return {
+      appointment: appt,
+      location: clinicDay?.school || null
+    };
   };
 
   const persistAppointmentStatus = async (timeWindow, childId, status, reason) => {
@@ -817,6 +830,7 @@ const Home = ({ setToken }) => {
                                   dateKey: row.dateKey,
                                   location: row.location,
                                   timeWindow: row.timeWindow,
+                                  procedureType: row.procedureType,
                                   note: row.note
                                 })
                               }
@@ -981,13 +995,17 @@ const Home = ({ setToken }) => {
                           title="Contact"
                           style={{ ...todayRowIconBtn, alignSelf: 'stretch' }}
                           onClick={() => {
-                            void getChild(item.childId).then((c) =>
+                            void Promise.all([
+                              getChild(item.childId),
+                              getTodayAppointmentContext(tw, item.childId)
+                            ]).then(([c, apptCtx]) =>
                               setTodayContactModal({
                                 child: c ?? null,
                                 intent: 'send_reminder',
                                 dateKey: todayKey,
-                                location: null,
-                                timeWindow: tw,
+                                location: apptCtx.location,
+                                timeWindow: apptCtx.appointment?.timeWindow === 'PM' ? 'PM' : 'AM',
+                                procedureType: apptCtx.appointment?.procedureType,
                                 note: null
                               })
                             );
@@ -1085,13 +1103,15 @@ const Home = ({ setToken }) => {
               return `Hello, regarding ${name}: we need to schedule a dental appointment. Please reply or call when you're available. Thank you.`;
             }
             if (ctx.intent === 'send_reminder' && ctx.dateKey) {
-              const tw = ctx.timeWindow === 'PM' ? 'PM' : 'AM';
-              const noteText = ctx.note ? ` Note: ${ctx.note}.` : '';
-              const atPart =
-                ctx.location != null && String(ctx.location).trim() !== '' && ctx.location !== '—'
-                  ? ` at ${ctx.location}`
-                  : '';
-              return `Hello! Reminder: ${name} is scheduled on ${ctx.dateKey} (${tw})${atPart}. Please arrive 10 minutes early.${noteText} Reply if you need to reschedule.`;
+              return buildAppointmentScheduleMessage({
+                child: c,
+                appointment: {
+                  timeWindow: ctx.timeWindow,
+                  procedureType: ctx.procedureType
+                },
+                date: ctx.dateKey,
+                location: ctx.location
+              });
             }
             return `Regarding ${name} — Today ${todayKey}.`;
           }}

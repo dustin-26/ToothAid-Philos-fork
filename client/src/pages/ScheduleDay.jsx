@@ -22,7 +22,7 @@ import {
   upsertClinicDay
 } from '../db/indexedDB';
 import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
-import { formatChildDisplayName } from '../utils/displayName';
+import { buildAppointmentScheduleMessage } from '../utils/appointmentMessages';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
 
@@ -1118,9 +1118,7 @@ export default function ScheduleDay({ token }) {
           onClose={() => setContactModal(null)}
           getSmsBody={(c) => {
             const appt = contactModal.appointment || null;
-            const windowText = appt?.timeWindow === 'PM' ? 'PM' : 'AM';
-            const noteText = appt?.note ? ` Note: ${appt.note}.` : '';
-            return `Hello! Reminder: ${formatChildDisplayName(c)} is scheduled on ${dateKey} (${windowText}) at ${location}. Please arrive 10 minutes early.${noteText} Reply if you need to reschedule.`;
+            return buildAppointmentScheduleMessage({ child: c, appointment: appt, date: dateKey, location });
           }}
         />
       )}

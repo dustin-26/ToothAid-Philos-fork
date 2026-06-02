@@ -301,11 +301,11 @@ const VisitToothMap = ({ toothStates }) => {
   const showPrimary = hasPrimaryData;
 
   const ToothGrid = ({ rows }) => (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', overflowX: 'auto', paddingBottom: 2 }}>
       {rows.map((row, idx) => (
         <div
           key={idx}
-          style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, 1fr)`, gap: '6px' }}
+          style={{ display: 'grid', gridTemplateColumns: `repeat(${row.length}, minmax(44px, 1fr))`, gap: '6px' }}
         >
           {row.map((tooth) => {
             const conditionId = getPersistedToothCondition(ts, tooth);
@@ -1792,7 +1792,7 @@ const ChildProfile = ({ token }) => {
           <div className="card" style={{ maxWidth: 520, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
             <h3 style={{ marginTop: 0 }}>Send a form to parents</h3>
             <p style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.45 }}>
-              Choose which fields appear on the public page. The link expires after one submission or after 24 hours.
+              Choose which fields appear on the public page. Parents can reuse the link if updates are needed.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
               {PARENT_FORM_FIELD_GROUPS.map((group) => (
