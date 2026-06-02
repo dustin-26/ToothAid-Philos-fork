@@ -62,6 +62,7 @@ function mergeVisitRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('treatmentTypes');
   restoreIfServerMissingOrEmpty('chiefComplaint', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('notes', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('behaviourFrankl');
   restoreIfServerMissingOrEmpty('requiresFollowUp');
   restoreIfServerMissingOrEmpty('followUpPriority', { treatBlankStringAsEmpty: true });
   restoreIfServerMissingOrEmpty('followUpDueAt');
