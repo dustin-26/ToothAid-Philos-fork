@@ -65,6 +65,7 @@ function mergeVisitRowFromPull(serverRow, local) {
   restoreIfServerMissingOrEmpty('behaviourFrankl');
   restoreIfServerMissingOrEmpty('requiresFollowUp');
   restoreIfServerMissingOrEmpty('followUpPriority', { treatBlankStringAsEmpty: true });
+  restoreIfServerMissingOrEmpty('followUpDays');
   restoreIfServerMissingOrEmpty('followUpDueAt');
   if (rest.dentition === undefined || rest.dentition === null) {
     if (local?.dentition != null) merged.dentition = local.dentition;
