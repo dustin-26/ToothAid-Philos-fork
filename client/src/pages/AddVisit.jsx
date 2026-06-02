@@ -45,7 +45,7 @@ const normalizeSymptomDaysForSave = (v) => {
 
 const GENERAL_TREATMENTS = ['Cleaning', 'Fluoride'];
 const COMMON_TREATMENTS = ['Cleaning', 'Fluoride', 'Sealant', 'Filling', 'Extraction'];
-const COMMON_MEDS = ['Amoxicillin', 'Ibuprofen', 'Paracetamol', 'Chlorhexidine', 'Metronidazole', 'Mefenamic'];
+const COMMON_MEDS = ['Amoxicillin', 'Ibuprofen', 'Paracetamol', 'Mefenamic', 'Co-amox'];
 
 const newTreatmentBlock = () => ({
   id: crypto.randomUUID(),

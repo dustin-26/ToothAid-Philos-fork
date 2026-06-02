@@ -16,7 +16,7 @@ import { notifyError, notifySuccess } from '../utils/notify';
 import { generateUniquePatientId, isValidPatientId, normalizePatientIdInput } from '../utils/patientId';
 
 const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
-const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'Blue Baby', 'Asthma'];
+const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'CHD', 'Asthma'];
 const GRADE_OPTIONS = ['Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Graduated', 'Teacher'];
 const GENDER_OPTIONS = [
   { value: 'M', label: 'Male' },

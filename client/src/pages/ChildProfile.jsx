@@ -32,7 +32,7 @@ import { getFollowUpTimingLabel, visitRequiresFollowUp } from '../utils/followUp
 import { TREATMENT_OPTIONS } from '../utils/treatmentTypes';
 
 const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
-const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'Blue Baby', 'Asthma'];
+const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'CHD', 'Asthma'];
 const CONSENT_PROCEDURE_OPTIONS = TREATMENT_OPTIONS.map((option) => option.label);
 const GRADE_OPTIONS = ['Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Graduated', 'Teacher'];
 const GENDER_OPTIONS = [

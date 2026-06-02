@@ -27,7 +27,7 @@ const GENDER_OPTIONS = [
 ];
 
 const MEDICAL_ALLERGY_PRESETS = ['None known', 'Penicillin', 'Shellfish', 'Latex'];
-const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'Blue Baby', 'Asthma'];
+const MEDICAL_HISTORY_PRESETS = ['G6PD', 'Hospitalization', 'CHD', 'Asthma'];
 
 const inputStyle = {
   width: '100%',
