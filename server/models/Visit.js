@@ -99,6 +99,10 @@ const visitSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  followUpDays: {
+    type: Number,
+    default: null
+  },
   followUpDueAt: {
     type: Date,
     default: null

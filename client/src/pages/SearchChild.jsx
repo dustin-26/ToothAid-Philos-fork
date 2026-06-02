@@ -15,11 +15,10 @@ import { PARENT_FORM_ALL_FIELD_MAP } from '../constants/parentFormFields';
 import { generateUniquePatientId } from '../utils/patientId';
 import {
   buildLatestFollowUpByChild,
-  FOLLOW_UP_TIMING_OPTIONS,
-  FOLLOW_UP_WITHIN_7_DAYS,
-  FOLLOW_UP_WITHIN_14_DAYS,
-  FOLLOW_UP_WHENEVER,
-  getFollowUpTimingLabel
+  FOLLOW_UP_SORT_RANK_NONE,
+  followUpSortRank,
+  formatFollowUpDueAt,
+  getFollowUpDueCountdownLabel
 } from '../utils/followUpTiming';
 
 const FILTER_FOLLOW_UP_NONE = 'NONE';
@@ -38,8 +37,7 @@ const SearchChild = ({ token }) => {
   const [filterSchool, setFilterSchool] = useState('');
   const [filterGrade, setFilterGrade] = useState('');
   const [filterClass, setFilterClass] = useState('');
-  const [filterFollowUp, setFilterFollowUp] = useState('');
-  const [sortMode, setSortMode] = useState('RECENT_VISIT'); // NAME | RECENT_VISIT | FOLLOW_UP
+  const [sortMode, setSortMode] = useState('FOLLOW_UP'); // NAME | RECENT_VISIT | FOLLOW_UP
   const [recentVisitByChild, setRecentVisitByChild] = useState({}); // { [childId]: isoDate }
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [parentFormName, setParentFormName] = useState('');
@@ -125,23 +123,12 @@ const SearchChild = ({ token }) => {
       } else if (filterSchool && (c.school || '') !== filterSchool) return false;
       if (filterGrade && (c.grade || '') !== filterGrade) return false;
       if (filterClass && (c.class || '') !== filterClass) return false;
-      if (filterFollowUp) {
-        const fu = followUpByChild.get(c.childId);
-        if (filterFollowUp === FILTER_FOLLOW_UP_NONE) {
-          if (fu) return false;
-        } else if (!fu || fu.timing !== filterFollowUp) {
-          return false;
-        }
-      }
       return true;
     });
     const followUpRank = (childId) => {
       const fu = followUpByChild.get(childId);
-      if (!fu?.timing) return 99;
-      if (fu.timing === FOLLOW_UP_WITHIN_7_DAYS) return 0;
-      if (fu.timing === FOLLOW_UP_WITHIN_14_DAYS) return 1;
-      if (fu.timing === FOLLOW_UP_WHENEVER) return 2;
-      return 99;
+      if (!fu?.timing) return FOLLOW_UP_SORT_RANK_NONE;
+      return followUpSortRank(fu.timing, fu.followUpDays);
     };
     const sorted = [...q].sort((a, b) => {
       if (sortMode === 'RECENT_VISIT') {
@@ -156,7 +143,7 @@ const SearchChild = ({ token }) => {
       return formatChildDisplayName(a).localeCompare(formatChildDisplayName(b), undefined, { sensitivity: 'base' });
     });
     return sorted;
-  }, [results, filterSchool, filterGrade, filterClass, filterFollowUp, sortMode, recentVisitByChild, followUpByChild]);
+  }, [results, filterSchool, filterGrade, filterClass, sortMode, recentVisitByChild, followUpByChild]);
 
   const createNewPatientParentForm = async () => {
     const name = parentFormName.trim();
@@ -304,29 +291,9 @@ const SearchChild = ({ token }) => {
               ))}
             </select>
           </div>
-          <div>
-            <label className="children-toolbar-label" htmlFor="children-filter-followup">
-              Priority
-            </label>
-            <select
-              id="children-filter-followup"
-              title="Based on follow-up timing from the latest visit"
-              className="children-toolbar-select"
-              value={filterFollowUp}
-              onChange={(e) => setFilterFollowUp(e.target.value)}
-            >
-              <option value="">All</option>
-              {FOLLOW_UP_TIMING_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-              <option value={FILTER_FOLLOW_UP_NONE}>No follow-up priority</option>
-            </select>
-          </div>
         </div>
 
-        {(filterSchool || filterGrade || filterClass || filterFollowUp) && (
+        {(filterSchool || filterGrade || filterClass) && (
           <button
             type="button"
             className="btn btn-secondary"
@@ -334,7 +301,6 @@ const SearchChild = ({ token }) => {
               setFilterSchool('');
               setFilterGrade('');
               setFilterClass('');
-              setFilterFollowUp('');
             }}
             style={{ marginTop: '12px', width: '100%' }}
           >
@@ -377,9 +343,9 @@ const SearchChild = ({ token }) => {
                 <p style={{ color: '#666', fontSize: '14px', marginBottom: '4px' }}>
                   {child.school} • {child.grade || '—'} • {child.class || '—'}
                 </p>
-                {fu?.timing ? (
+                {followUpDueLabel ? (
                   <p style={{ color: '#6b7280', fontSize: '13px', margin: 0 }}>
-                    Priority (follow-up): {getFollowUpTimingLabel(fu.timing)}
+                    {followUpDueLabel}
                   </p>
                 ) : null}
               </div>
