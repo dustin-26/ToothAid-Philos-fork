@@ -28,20 +28,24 @@ function App() {
 
   // Perform auto-sync
   const doAutoSync = async (trigger) => {
+    const isSilent = trigger === 'periodic' || trigger === 'foreground';
+
     // Guards: no token, already syncing, or too soon (10s cooldown)
     if (isParentFormPage()) return;
     if (!token) return;
+    if (!navigator.onLine) return;
+    if (isSilent && document.visibilityState !== 'visible') return;
     if (syncInProgress.current) return;
     if (Date.now() - lastSyncTime.current < 10000) return;
 
     // Check if there are pending operations
     const pendingOps = await getOutboxOps();
     
-    // Skip sync if no pending ops (unless it's app launch - always sync on launch)
-    if (pendingOps.length === 0 && trigger !== 'launch') return;
+    // Skip sync if no pending ops, except launch/foreground checks that should pull updates.
+    if (pendingOps.length === 0 && trigger !== 'launch' && !isSilent) return;
 
     syncInProgress.current = true;
-    setIsSyncing(true);
+    if (!isSilent) setIsSyncing(true);
     lastSyncTime.current = Date.now();
 
     try {
@@ -49,18 +53,22 @@ function App() {
       
       if (result.success) {
         // Only show toast if something was synced
-        if (pendingOps.length > 0) {
+        if (!isSilent && pendingOps.length > 0) {
           setSyncToast({
             type: 'success',
             message: `Synced ${pendingOps.length} change${pendingOps.length > 1 ? 's' : ''}`
           });
-        } else if (result.deletedCount > 0) {
+        } else if (!isSilent && result.deletedCount > 0) {
           setSyncToast({
             type: 'success',
             message: `Sync complete. ${result.deletedCount} removed.`
           });
         }
       } else {
+        if (isSilent) {
+          console.warn(`${trigger} sync failed:`, result.error);
+          return;
+        }
         setSyncToast({
           type: 'error',
           message: 'Sync failed. Try again later.'
@@ -68,13 +76,14 @@ function App() {
       }
     } catch (error) {
       console.error('Auto-sync error:', error);
+      if (isSilent) return;
       setSyncToast({
         type: 'error',
         message: 'Sync failed. Try again later.'
       });
     } finally {
       syncInProgress.current = false;
-      setIsSyncing(false);
+      if (!isSilent) setIsSyncing(false);
     }
   };
 
@@ -109,7 +118,30 @@ function App() {
     }
   }, [token]);
 
-  // 3. Auto-hide toast after 3 seconds
+  // 3. Pull updates when opened/foregrounded, then keep checking while foregrounded
+  useEffect(() => {
+    if (!token) return undefined;
+
+    const syncIfVisible = () => {
+      if (document.visibilityState === 'visible') {
+        doAutoSync('foreground');
+      }
+    };
+
+    syncIfVisible();
+    document.addEventListener('visibilitychange', syncIfVisible);
+
+    const interval = setInterval(() => {
+      doAutoSync('periodic');
+    }, 30000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', syncIfVisible);
+      clearInterval(interval);
+    };
+  }, [token]);
+
+  // 4. Auto-hide toast after 3 seconds
   useEffect(() => {
     if (syncToast) {
       const timer = setTimeout(() => {

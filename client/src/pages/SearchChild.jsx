@@ -325,6 +325,9 @@ const SearchChild = ({ token }) => {
               (fu?.timing === FOLLOW_UP_WHENEVER ? getFollowUpTimingLabel(fu.timing, fu.followUpDays) : null);
             const behaviour = behaviourByChild.get(child.childId);
             const behaviourStyle = BEHAVIOUR_BADGE_COLORS[behaviour];
+            const followUpDueLabel = fu?.dueAt
+              ? `Follow-up: ${formatFollowUpDueAt(fu.dueAt)} (${getFollowUpDueCountdownLabel(fu.dueAt)})`
+              : '';
             return (
             <Link key={child.childId} to={`/children/${child.childId}`} style={{ textDecoration: 'none', color: 'inherit' }}>
               <div className="card" style={{ cursor: 'pointer', marginBottom: '8px' }}>

@@ -121,13 +121,6 @@ router.post('/:token/submit', async (req, res) => {
     if (!row) {
       return res.status(404).json({ ok: false, error: 'This link is not valid.' });
     }
-    const now = new Date();
-    if (row.usedAt) {
-      return res.status(400).json({ ok: false, error: 'This form has already been submitted.' });
-    }
-    if (row.expiresAt && new Date(row.expiresAt) < now) {
-      return res.status(400).json({ ok: false, error: 'This link has expired.' });
-    }
 
     const fieldsMap = row.fieldsRequested && typeof row.fieldsRequested === 'object' ? row.fieldsRequested : {};
     let child;
@@ -165,9 +158,6 @@ router.post('/:token/submit', async (req, res) => {
     child.updatedAt = new Date();
     await child.save();
 
-    row.usedAt = new Date();
-    await row.save();
-
     res.json({ ok: true });
   } catch (e) {
     console.error('parent-form submit', e);
@@ -175,7 +165,7 @@ router.post('/:token/submit', async (req, res) => {
   }
 });
 
-/** Staff: create a one-time (or 24h) parent link. */
+/** Staff: create a reusable parent link. */
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { childId, fields, mode, patientName, patientId } = req.body || {};
@@ -204,7 +194,6 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const token = crypto.randomBytes(24).toString('hex');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await ParentFormToken.create({
       token,
       mode: tokenMode,
@@ -214,13 +203,11 @@ router.post('/', authenticateToken, async (req, res) => {
       firstName: nameParts?.firstName || null,
       lastName: nameParts?.lastName || null,
       fieldsRequested: fieldsMap,
-      expiresAt,
       createdBy: req.user?.username || null
     });
 
     res.json({
       token,
-      expiresAt: expiresAt.toISOString(),
       fields: fieldsMap
     });
   } catch (e) {
@@ -235,21 +222,6 @@ router.get('/:token', async (req, res) => {
     const row = await ParentFormToken.findOne({ token }).lean();
     if (!row) {
       return res.status(404).json({ ok: false, error: 'This link is not valid.' });
-    }
-    const now = new Date();
-    if (row.usedAt) {
-      return res.json({
-        ok: false,
-        expired: true,
-        error: 'This form has already been submitted.'
-      });
-    }
-    if (row.expiresAt && new Date(row.expiresAt) < now) {
-      return res.json({
-        ok: false,
-        expired: true,
-        error: 'This link has expired.'
-      });
     }
 
     const fieldsMap = row.fieldsRequested && typeof row.fieldsRequested === 'object' ? row.fieldsRequested : {};
@@ -266,12 +238,10 @@ router.get('/:token', async (req, res) => {
 
     res.json({
       ok: true,
-      expired: false,
       mode: row.mode || 'update',
       childName: displayName,
       fields: fieldsMap,
-      initial,
-      expiresAt: row.expiresAt
+      initial
     });
   } catch (e) {
     console.error('parent-form get', e);

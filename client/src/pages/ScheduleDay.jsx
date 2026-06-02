@@ -22,7 +22,7 @@ import {
   upsertClinicDay
 } from '../db/indexedDB';
 import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
-import { formatChildDisplayName } from '../utils/displayName';
+import { buildAppointmentScheduleMessage } from '../utils/appointmentMessages';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
 
@@ -116,32 +116,56 @@ export default function ScheduleDay({ token }) {
   };
 
   const getSimpleStatusLabel = (status) => {
-    const category = getStatusCategory(status);
-    if (category === 'ACTIVE') return 'Scheduled';
-    if (category === 'FOLLOW_UP') return 'Needs follow-up';
-    return 'Done';
+    const labels = {
+      SCHEDULED: 'Scheduled',
+      ATTENDED: 'Attended',
+      MISSED: 'Missed',
+      RESCHEDULED: 'Rescheduled',
+      CANCELLED: 'Cancelled'
+    };
+    return labels[status] || String(status || 'Unknown');
   };
 
   const getSimpleStatusBadgeStyle = (status) => {
-    const category = getStatusCategory(status);
-    if (category === 'ACTIVE') {
+    if (status === 'SCHEDULED') {
       return {
         background: '#dbeafe',
         color: '#1d4ed8',
         border: '1px solid #bfdbfe'
       };
     }
-    if (category === 'FOLLOW_UP') {
+    if (status === 'ATTENDED') {
+      return {
+        background: '#dcfce7',
+        color: '#166534',
+        border: '1px solid #bbf7d0'
+      };
+    }
+    if (status === 'MISSED') {
+      return {
+        background: '#fee2e2',
+        color: '#991b1b',
+        border: '1px solid #fecaca'
+      };
+    }
+    if (status === 'RESCHEDULED') {
       return {
         background: '#fef3c7',
         color: '#b45309',
         border: '1px solid #fde68a'
       };
     }
+    if (status === 'CANCELLED') {
+      return {
+        background: '#e5e7eb',
+        color: '#374151',
+        border: '1px solid #d1d5db'
+      };
+    }
     return {
-      background: '#dcfce7',
-      color: '#166534',
-      border: '1px solid #bbf7d0'
+      background: '#f3f4f6',
+      color: '#374151',
+      border: '1px solid #e5e7eb'
     };
   };
 
@@ -1118,9 +1142,7 @@ export default function ScheduleDay({ token }) {
           onClose={() => setContactModal(null)}
           getSmsBody={(c) => {
             const appt = contactModal.appointment || null;
-            const windowText = appt?.timeWindow === 'PM' ? 'PM' : 'AM';
-            const noteText = appt?.note ? ` Note: ${appt.note}.` : '';
-            return `Hello! Reminder: ${formatChildDisplayName(c)} is scheduled on ${dateKey} (${windowText}) at ${location}. Please arrive 10 minutes early.${noteText} Reply if you need to reschedule.`;
+            return buildAppointmentScheduleMessage({ child: c, appointment: appt, date: dateKey, location });
           }}
         />
       )}
