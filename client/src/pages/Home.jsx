@@ -16,7 +16,13 @@ import {
   setMeta,
   upsertAppointment
 } from '../db/indexedDB';
-import { countMissedAppointments, getSupersededAppointmentIds, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
+import {
+  buildWaitlistRevertPayload,
+  countMissedAppointments,
+  getSupersededAppointmentIds,
+  isAppointmentHiddenAsSuperseded,
+  isWaitlistOriginAppointment
+} from '../utils/appointmentStatus';
 import { buildAppointmentScheduleMessage } from '../utils/appointmentMessages';
 import { formatChildDisplayName } from '../utils/displayName';
 import { toYmd } from '../utils/dates';
@@ -512,6 +518,20 @@ const Home = ({ setToken }) => {
   const persistAppointmentStatus = async (timeWindow, childId, status, reason) => {
     const target = await findTodayAppointment(timeWindow, childId);
     if (!target) return false;
+    if (status === 'CANCELLED' && isWaitlistOriginAppointment(target)) {
+      const reverted = buildWaitlistRevertPayload(target);
+      await upsertAppointment(reverted);
+      await addToOutbox('UPSERT_APPOINTMENT', reverted.appointmentId, reverted);
+      if (navigator.onLine) {
+        const token = localStorage.getItem('token');
+        if (token) {
+          try {
+            await performSync(token);
+          } catch (_) {}
+        }
+      }
+      return 'waitlist';
+    }
     const username = localStorage.getItem('username') || 'unknown';
     const nowIso = new Date().toISOString();
     const followUpStatuses = new Set(['CANCELLED', 'RESCHEDULED']);
@@ -568,6 +588,13 @@ const Home = ({ setToken }) => {
   const updateStatus = async (timeWindow, childId, status) => {
     const persisted = await persistAppointmentStatus(timeWindow, childId, status, 'updated-from-today-queue');
     if (!persisted) return;
+    if (persisted === 'waitlist') {
+      const next = { AM: [...queue.AM], PM: [...queue.PM] };
+      next[timeWindow] = next[timeWindow].filter((item) => item.childId !== childId);
+      await persistQueue(next);
+      setExpandedKey(null);
+      return;
+    }
     const localStatus = status === 'SCHEDULED' ? 'WAITING' : status;
     const next = { AM: [...queue.AM], PM: [...queue.PM] };
     next[timeWindow] = next[timeWindow].map((item) =>

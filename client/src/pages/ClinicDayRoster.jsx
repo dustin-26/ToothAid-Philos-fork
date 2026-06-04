@@ -14,6 +14,7 @@ import {
   addToOutbox,
   performSync
 } from '../db/indexedDB';
+import { buildWaitlistRevertPayload, isWaitlistOriginAppointment } from '../utils/appointmentStatus';
 
 const ClinicDayRoster = ({ token }) => {
   const { clinicDayId } = useParams();
@@ -61,10 +62,13 @@ const ClinicDayRoster = ({ token }) => {
       const appointment = appointments.find(a => a.appointmentId === appointmentId);
       if (!appointment) return;
 
-      const updatedAppointment = {
-        ...appointment,
-        status: newStatus
-      };
+      const updatedAppointment =
+        newStatus === 'CANCELLED' && isWaitlistOriginAppointment(appointment)
+          ? buildWaitlistRevertPayload(appointment)
+          : {
+              ...appointment,
+              status: newStatus
+            };
 
       await upsertAppointment(updatedAppointment);
       await addToOutbox('UPSERT_APPOINTMENT', appointmentId, updatedAppointment);

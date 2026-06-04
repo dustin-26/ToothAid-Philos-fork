@@ -21,7 +21,13 @@ import {
   upsertAppointment,
   upsertClinicDay
 } from '../db/indexedDB';
-import { getSupersededAppointmentIds, isActiveBookedSlot, isAppointmentHiddenAsSuperseded } from '../utils/appointmentStatus';
+import {
+  buildWaitlistRevertPayload,
+  getSupersededAppointmentIds,
+  isActiveBookedSlot,
+  isAppointmentHiddenAsSuperseded,
+  isWaitlistOriginAppointment
+} from '../utils/appointmentStatus';
 import { buildAppointmentScheduleMessage } from '../utils/appointmentMessages';
 import { notifyError, notifySuccess } from '../utils/notify';
 import { toYmd } from '../utils/dates';
@@ -467,9 +473,28 @@ export default function ScheduleDay({ token }) {
         }
       }
 
+      const procedureType = resolveProcedureTypeForSave(editForm.procedureSelect, editForm.procedureCustom);
+      const note = editForm.note.trim() || null;
+      const oldTw = base.timeWindow === 'PM' ? 'PM' : 'AM';
+
+      if (editForm.status === 'CANCELLED' && isWaitlistOriginAppointment(base)) {
+        const reverted = buildWaitlistRevertPayload(base, { procedureType, note });
+        await upsertAppointment(reverted);
+        await addToOutbox('UPSERT_APPOINTMENT', reverted.appointmentId, reverted);
+        await renumberScheduledInWindow(dayId, oldTw);
+        await load();
+        if (navigator.onLine && token) {
+          try {
+            await performSync(token);
+          } catch {}
+        }
+        notifySuccess('Returned to waiting list.');
+        closeEditAppointment();
+        return;
+      }
+
       let orderVal = base.order;
       if (editForm.status === 'SCHEDULED') {
-        const oldTw = base.timeWindow === 'PM' ? 'PM' : 'AM';
         if (tw !== oldTw || base.status !== 'SCHEDULED') {
           const cnt = fresh.filter(
             (a) =>
@@ -486,8 +511,8 @@ export default function ScheduleDay({ token }) {
       const updated = {
         ...base,
         timeWindow: tw,
-        procedureType: resolveProcedureTypeForSave(editForm.procedureSelect, editForm.procedureCustom),
-        note: editForm.note.trim() || null,
+        procedureType,
+        note,
         status: editForm.status,
         order: orderVal
       };
@@ -495,7 +520,7 @@ export default function ScheduleDay({ token }) {
       await upsertAppointment(updated);
       await addToOutbox('UPSERT_APPOINTMENT', updated.appointmentId, updated);
 
-      const windows = new Set([base.timeWindow === 'PM' ? 'PM' : 'AM', tw]);
+      const windows = new Set([oldTw, tw]);
       for (const w of windows) {
         await renumberScheduledInWindow(dayId, w);
       }
@@ -521,8 +546,14 @@ export default function ScheduleDay({ token }) {
     const tw = editModalAppt.timeWindow === 'PM' ? 'PM' : 'AM';
     setSaving(true);
     try {
-      await deleteAppointment(apptId);
-      await addToOutbox('DELETE_APPOINTMENT', apptId, { appointmentId: apptId });
+      if (isWaitlistOriginAppointment(editModalAppt)) {
+        const reverted = buildWaitlistRevertPayload(editModalAppt);
+        await upsertAppointment(reverted);
+        await addToOutbox('UPSERT_APPOINTMENT', reverted.appointmentId, reverted);
+      } else {
+        await deleteAppointment(apptId);
+        await addToOutbox('DELETE_APPOINTMENT', apptId, { appointmentId: apptId });
+      }
       await renumberScheduledInWindow(dayId, tw);
       await load();
       if (navigator.onLine && token) {
@@ -530,7 +561,9 @@ export default function ScheduleDay({ token }) {
           await performSync(token);
         } catch {}
       }
-      notifySuccess('Appointment deleted.');
+      notifySuccess(
+        isWaitlistOriginAppointment(editModalAppt) ? 'Returned to waiting list.' : 'Appointment deleted.'
+      );
       closeEditAppointment();
     } catch (e) {
       notifyError(e?.message || 'Failed to delete appointment');
