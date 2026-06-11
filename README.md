@@ -1,4 +1,4 @@
-# SIGHT
+# SIGHT-fork-testing
 
 **SIGHT** is an offline-first dental clinic PWA for registering patients (children), recording visits, managing **schedule quotas and appointments**, viewing **reports and charts**, and **syncing** with a central server when connectivity allows.  
 The npm packages are still named `toothaid-client` and `toothaid-server`; this repository is hosted on GitHub as **SIGHT**.
